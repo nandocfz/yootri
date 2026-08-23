@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   loadPlan, blockAt, weekCount, sessionsAt, setSessionsAt,
-  refit, diffPlans, applyDraft, weekTotals, newPlan, pruneHistory, mintPlanId,
+  refit, diffPlans, applyDraft, weekTotals, newPlan, pruneHistory, mintPlanId, moveSession,
 } from '../assets/coach/plan.js';
 import { normalizeProfile, DAYS } from '../assets/coach/profile.js';
 import { durToMin } from '../assets/coach/duration.js';
@@ -324,4 +324,113 @@ test('refit can resize a season when the race date moves', () => {
 test('refit keeps the season length when not told otherwise', () => {
   const p = newPlan({ name: 'A', startISO: '2026-08-17', raceDate: '2026-12-07' });
   assert.equal(weekCount(refit(p, { profile: { ...p.profile, annualHours: 700 } })), weekCount(p));
+});
+
+/* ---- Moving a session ---------------------------------------------------- */
+
+test('a session moved within its week just changes day', () => {
+  const p = loadPlan(v2());
+  const s = sessionsAt(p, 0).find((x) => durToMin(x.dur) > 0);
+  const next = moveSession(p, { id: s.id, toWeek: 0, day: 'Fri' });
+  const moved = sessionsAt(next, 0).find((x) => x.id === s.id);
+  assert.equal(moved.day, 'Fri');
+  assert.equal(moved.focus, s.focus, 'nothing else about it changes');
+  assert.equal(moved.dur, s.dur);
+});
+
+test('a session moved to another week leaves the week it came from', () => {
+  const p = loadPlan(v2());
+  const s = sessionsAt(p, 0).find((x) => durToMin(x.dur) > 0);
+  const next = moveSession(p, { id: s.id, toWeek: 1, day: 'Tue', mintId: () => 'mv-1' });
+
+  assert.equal(sessionsAt(next, 0).some((x) => x.id === s.id), false, 'gone from week 0');
+  const landed = sessionsAt(next, 1).find((x) => x.id === 'mv-1');
+  assert.equal(landed.day, 'Tue');
+  assert.equal(landed.focus, s.focus);
+});
+
+test('a session crossing weeks is given a new id', () => {
+  // Generated ids are `w{week}-{n}`, so a session dragged out of week 0 keeps a
+  // week-0 id. "Reset week" on week 0 then mints that same id again, and done
+  // flags, logged actuals and the diff are all keyed by id — two live sessions
+  // sharing one is a silent corruption.
+  const p = loadPlan(v2());
+  const s = sessionsAt(p, 0).find((x) => durToMin(x.dur) > 0);
+  const moved = moveSession(p, { id: s.id, toWeek: 1, day: 'Tue', mintId: () => 'mv-1' });
+  const reset = refit(moved, { from: 0, to: 0 });
+
+  const ids = Object.values(reset.weeks).flat().map((x) => x.id);
+  assert.equal(new Set(ids).size, ids.length, 'every live session has its own id');
+});
+
+test('a moved session keeps its tick and its log under the new id', () => {
+  const p = loadPlan(v2());
+  const s = sessionsAt(p, 0).find((x) => durToMin(x.dur) > 0);
+  const withHistory = { ...p, done: { [s.id]: true }, actuals: { [s.id]: { status: 'done', min: 45 } } };
+
+  const next = moveSession(withHistory, { id: s.id, toWeek: 2, day: 'Sat', mintId: () => 'mv-1' });
+
+  assert.equal(next.done['mv-1'], true);
+  assert.deepEqual(next.actuals['mv-1'], { status: 'done', min: 45 });
+  assert.equal(next.done[s.id], undefined, 'the old id is not left behind');
+  assert.equal(next.actuals[s.id], undefined);
+});
+
+test('a moved session with no history does not invent any', () => {
+  const p = loadPlan(v2());
+  const s = sessionsAt(p, 0).find((x) => durToMin(x.dur) > 0);
+  const next = moveSession(p, { id: s.id, toWeek: 1, day: 'Tue', mintId: () => 'mv-1' });
+  assert.deepEqual(next.done, {});
+  assert.deepEqual(next.actuals, {});
+});
+
+test('moveSession does not mutate the plan it was given', () => {
+  const p = loadPlan(v2());
+  const s = sessionsAt(p, 0).find((x) => durToMin(x.dur) > 0);
+  const before = JSON.stringify(p);
+  moveSession(p, { id: s.id, toWeek: 1, day: 'Tue', mintId: () => 'mv-1' });
+  assert.equal(JSON.stringify(p), before);
+});
+
+test('moving a session nobody has changes nothing', () => {
+  const p = loadPlan(v2());
+  assert.deepEqual(moveSession(p, { id: 'no-such-session', toWeek: 1, day: 'Tue' }), p);
+});
+
+test('a session cannot be moved off the end of the season', () => {
+  // Silently clamping would drop it into the last week instead, which is not
+  // what anybody dragging it meant.
+  const p = loadPlan(v2());
+  const s = sessionsAt(p, 0).find((x) => durToMin(x.dur) > 0);
+  assert.deepEqual(moveSession(p, { id: s.id, toWeek: weekCount(p), day: 'Tue' }), p);
+  assert.deepEqual(moveSession(p, { id: s.id, toWeek: -1, day: 'Tue' }), p);
+});
+
+test('a session cannot be moved onto a day that does not exist', () => {
+  const p = loadPlan(v2());
+  const s = sessionsAt(p, 0).find((x) => durToMin(x.dur) > 0);
+  assert.deepEqual(moveSession(p, { id: s.id, toWeek: 1, day: 'Funday' }), p);
+});
+
+test('week volumes follow the session that moved', () => {
+  const p = loadPlan(v2());
+  const s = sessionsAt(p, 0).find((x) => durToMin(x.dur) > 0);
+  const before = weekTotals(p);
+  const next = weekTotals(moveSession(p, { id: s.id, toWeek: 1, day: 'Tue', mintId: () => 'mv-1' }));
+
+  assert.equal(next[0], before[0] - durToMin(s.dur));
+  assert.equal(next[1], before[1] + durToMin(s.dur));
+});
+
+test('a new plan starts with its race already on the calendar', () => {
+  const p = newPlan({ name: 'Cascais', startISO: '2026-08-17', raceDate: '2027-07-25', raceType: 'ironman', now: 1 });
+  assert.equal(p.events.length, 1);
+  assert.equal(p.events[0].date, '2027-07-25');
+  assert.equal(p.events[0].raceType, 'ironman');
+  assert.equal(p.events[0].goal, true);
+});
+
+test('a new plan with no race date starts with an empty calendar', () => {
+  const p = newPlan({ name: 'Base', startISO: '2026-08-17', now: 1 });
+  assert.deepEqual(p.events, []);
 });

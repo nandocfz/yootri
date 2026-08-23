@@ -29,8 +29,11 @@ email and save.
 
 **Authentication → Settings → Authorized domains → Add domain.**
 
-Add every origin you serve from. `localhost` is there by default; add your
-production domain (for example `yootri.example.com`).
+Add every origin you serve from. `localhost` is there by default — which is why
+`make dev` serves on `http://localhost:8000/` and sign-in just works locally,
+and why the same app at `http://127.0.0.1:8000/` cannot sign in. The bare IP is
+not on that list, and the port is not part of it either way. Add your production
+domain (for example `yootri.example.com`).
 
 This is the step that catches forks. Until your domain is on this list, sign-in
 fails and the app falls back to local-only.
@@ -82,9 +85,9 @@ own domains.
 
 ## Checking it worked
 
-Serve the app (`python3 -m http.server 8000`), open it, and sign in. The header
-chip should change from **Local only** to your email address. Make a change,
-open the same account in another browser, and the plan should arrive.
+Serve the app (`make dev`), open it, and sign in. The header chip should change
+from **Local only** to your email address. Make a change, open the same account
+in another browser, and the plan should arrive.
 
 If the chip still says **Local only**, click it — the panel reports what Firebase
 said. An authorized-domain problem is by far the most common cause.
