@@ -1068,7 +1068,9 @@
     .cal-row { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
     .cal-day { min-height: 62px; padding: 3px; }
     .cal-dow.rail { display: none; }
-    .cal-chip-dur, .cal-evt span { display: none; }
+    /* At this width a day is 44px: the chips and the week rail carry the
+       numbers, and a per-day total only wraps onto a second line. */
+    .cal-chip-dur, .cal-evt span, .cal-dmins { display: none; }
     .cal-chip { display: inline-flex; }
     .cal-evt { width: auto; }
     .cal-rail {
@@ -1289,7 +1291,7 @@
   import { fitToRace } from './assets/coach/season.js';
   import { weeksUntil } from './assets/coach/dates.js';
   import {
-    dateOf, monthOf, firstOfMonth, addMonths, monthGrid,
+    dateOf, monthOf, firstOfMonth, addMonths, monthGrid, clampMonth,
   } from './assets/coach/calendar.js';
   import {
     RACE_TYPES, normalizeEvents, upsertEvent, removeEvent, goalEvent, eventsByDate,
@@ -1497,7 +1499,6 @@
     state.chartHidden = plan.charthidden || {};
     state.sessions = sessionsFor(state.week);
     state.view = vw.view === 'month' ? 'month' : 'week';
-    state.month = monthOf((vw.month || '') + '-01') || null;
     state.events = normalizeEvents(plan.events);
 
     // A plan stored before the calendar existed keeps its race only on the
@@ -1509,6 +1510,11 @@
       plan.events = state.events;
       savePlanLocal(plan);
     }
+
+    // The stored month is only a bookmark, and a bookmark outlives the thing it
+    // pointed at — an imported plan, a cloud merge, a start date that moved.
+    // One from another year draws an empty grid with no landmark to get back by.
+    state.month = clampMonth(vw.month, planSpan()) || null;
 
     state.dragId = null; state.editingId = null; state.hoverIdx = null;
   }
@@ -1528,6 +1534,18 @@
   }
 
   const setWeekSessions = (w, sessions) => { plan.weeks['w' + w] = sessions; };
+
+  /* What the calendar has anything to show for: the season itself, reaching out
+     to a later event if one is further off than the season goes — that is
+     exactly the race you have not built for yet. */
+  function planSpan() {
+    const seasonEnd = dateOf(state.start, weekCount(plan) - 1, 'Sun');
+    const lastEvent = state.events.length ? state.events[state.events.length - 1].date : null;
+    return {
+      fromISO: state.start,
+      toISO: lastEvent && seasonEnd && lastEvent > seasonEnd ? lastEvent : seasonEnd,
+    };
+  }
 
   adoptPlan(ensurePlans());
 
@@ -2674,7 +2692,8 @@
         'Move the start date, or start a new plan.';
       return;
     }
-    el.innerHTML = 'The season becomes <b>' + weeks + ' weeks</b> long, ending on this date.' +
+    el.innerHTML = 'The season becomes <b>' + weeks + ' week' + (weeks === 1 ? '' : 's') +
+      '</b> long, ending on this date.' +
       (weeks > LONG_RUNWAY_WEEKS
         ? ' That is a long runway: the early weeks come out as a repeat of the first block rather ' +
           'than a shape built for it, so it is worth starting a plan closer to the date instead.'
@@ -3046,11 +3065,19 @@
       : '';
 
     const delta = d.totalDeltaMinutes;
+    // Moving the goal event re-lengthens the season, which nothing could do
+    // before — and "49 of 16 weeks change" is not a sentence. When the runway
+    // itself moves, that is the headline rather than a count against the old one.
+    const draftWeeks = draft && draft.season ? draft.season.length : totalWeeks();
+    const scope = draftWeeks === totalWeeks()
+      ? d.weeks.length + ' of ' + totalWeeks() + ' weeks change'
+      : 'The season becomes <b>' + draftWeeks + ' week' + (draftWeeks === 1 ? '' : 's') +
+        '</b> long, from ' + totalWeeks();
     panelShell(
       '<h2>Review changes</h2>' +
       '<p class="pnl-sub">' +
         (d.weeks.length
-          ? d.weeks.length + ' of ' + totalWeeks() + ' weeks change' +
+          ? scope +
             (delta ? ', season volume ' + (delta > 0 ? '+' : '−') + fmtTotal(Math.abs(delta)) : '')
           : 'Nothing changes') + '.</p>' +
       (d.weeks.length
@@ -3785,6 +3812,9 @@
     const v = e.target.value;
     if (!v) return;
     state.start = v;
+    // The whole season just moved. A month bookmarked against the old start can
+    // now be nowhere near the plan, so bring it back to the week in view.
+    state.month = clampMonth(state.month, planSpan()) || monthOf(dateOf(state.start, state.week, 'Mon'));
     persistPlan();
     renderAll();
   });

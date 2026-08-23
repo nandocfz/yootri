@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  dateOf, weekIndexOf, monthOf, firstOfMonth, addMonths, monthGrid,
+  dateOf, weekIndexOf, monthOf, firstOfMonth, addMonths, monthGrid, clampMonth,
 } from '../assets/coach/calendar.js';
 
 /* A month view has to agree with the week board about which calendar date a
@@ -148,4 +148,28 @@ test('a grid crossing daylight saving keeps seven-day rows', () => {
 test('a grid has no answer rather than a wrong one', () => {
   assert.equal(monthGrid('bad', { startISO: '2026-08-17', weeks: 16 }), null);
   assert.equal(monthGrid('2026-08', { startISO: null, weeks: 16 }), null);
+});
+
+test('a month inside the plan is left where it is', () => {
+  assert.equal(clampMonth('2026-10', { fromISO: '2026-08-17', toISO: '2026-12-06' }), '2026-10');
+  assert.equal(clampMonth('2026-08', { fromISO: '2026-08-17', toISO: '2026-12-06' }), '2026-08');
+  assert.equal(clampMonth('2026-12', { fromISO: '2026-08-17', toISO: '2026-12-06' }), '2026-12');
+});
+
+test('a month with no relation to the plan is pulled back to one that has', () => {
+  // A stored month survives an import, a cloud merge and a moved start date.
+  // Trusting one from a different year strands the calendar on an empty grid
+  // with nothing on it to navigate back by.
+  assert.equal(clampMonth('2025-08', { fromISO: '2026-08-17', toISO: '2026-12-06' }), '2026-08');
+  assert.equal(clampMonth('2028-01', { fromISO: '2026-08-17', toISO: '2026-12-06' }), '2026-12');
+});
+
+test('clamping has no answer rather than a wrong one', () => {
+  assert.equal(clampMonth('nonsense', { fromISO: '2026-08-17', toISO: '2026-12-06' }), null);
+  assert.equal(clampMonth('2026-10', { fromISO: null, toISO: '2026-12-06' }), null);
+  assert.equal(clampMonth(null, { fromISO: '2026-08-17', toISO: '2026-12-06' }), null);
+});
+
+test('a range that ends before it starts still gives a usable month', () => {
+  assert.equal(clampMonth('2027-01', { fromISO: '2026-08-17', toISO: '2026-01-01' }), '2026-08');
 });

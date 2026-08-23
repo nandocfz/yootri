@@ -70,6 +70,33 @@ export function addMonths(monthKey, n) {
 }
 
 /**
+ * Pull a month key into the span a plan actually occupies.
+ *
+ * The month being looked at is stored on the plan, and a stored value outlives
+ * the thing it described: a plan file arrives from somebody else's season, a
+ * cloud merge brings one back, the start date moves. A month from another year
+ * renders a grid with nothing on it and no landmark to navigate back by, so it
+ * is not worth trusting when the plan itself says where it is.
+ *
+ * @param {string} monthKey "YYYY-MM"
+ * @param {object} opts
+ * @param {string} opts.fromISO first day the plan covers
+ * @param {string} opts.toISO   last day worth showing (the season's end, or a
+ *                              later event, whichever is further out)
+ */
+export function clampMonth(monthKey, { fromISO, toISO } = {}) {
+  const month = firstOfMonth(monthKey) ? monthOf(firstOfMonth(monthKey)) : null;
+  const first = monthOf(fromISO);
+  const last = monthOf(toISO);
+  if (!month || !first) return null;
+  // A range with no end, or one that ends before it starts, still has a start.
+  const end = last && last >= first ? last : first;
+  if (month < first) return first;
+  if (month > end) return end;
+  return month;
+}
+
+/**
  * One month as whole Monday-to-Sunday rows, each tagged with the plan week it
  * is. Rows run from the Monday on or before the 1st to the Sunday on or after
  * the last day, so the grid is always rectangular and a row is always exactly

@@ -124,14 +124,42 @@ Assets use relative paths and ES modules need a real origin, so serve the folder
 rather than opening `index.html` from disk:
 
 ```bash
-python3 -m http.server 8000   # then open http://localhost:8000/
+make dev            # http://localhost:8000/, opens a browser
+make dev PORT=8001  # when 8000 is taken
+make dev OPEN=0     # do not open a browser
+make stop           # free port 8000 again
 ```
+
+`make stop` is there because a dev server outlives the terminal it was started
+from — close the window instead of pressing Ctrl-C and it keeps the port, with
+its parent shell gone. `make dev` says so when it hits that, and names the way
+out rather than leaving you to remember the `lsof` incantation.
+
+That runs [`tools/dev-server.mjs`](tools/dev-server.mjs): one small Node script,
+no dependencies. Any static server works — `python3 -m http.server
+8000` is fine — but this one is deliberately stricter than the folder deserves,
+because each thing it refuses to do costs an afternoon otherwise:
+
+- it serves `.js` as JavaScript, without which the browser silently refuses
+  every engine module and the page loads with nothing behind it,
+- it sends `Cache-Control: no-store`, so a saved edit is never a stale page,
+- it 404s a missing file rather than falling back to `index.html`,
+- and it 404s `Season.js` when the file is `season.js`. That one only matters on
+  macOS, where a case-wrong path opens happily and then 404s on Pages, which
+  runs on Linux.
+
+**Open it as `localhost`, not `127.0.0.1`.** Google sign-in works on the first
+and fails on the second: `localhost` is on Firebase's authorized-domain list by
+default and the bare IP is not. Nothing else in the app can tell the difference,
+which is what makes it a confusing ten minutes. `make dev` prints and opens the
+spelling that works.
 
 There is no build step and there are no dependencies. `package.json` exists only
 so `node --test` can run the engine's unit tests:
 
 ```bash
-npm test
+make test    # npm test
+make check   # the whole CI gate: unit tests + repo hygiene
 ```
 
 Every pull request runs the same `npm test` on Node 20, 22 and 24, plus a check

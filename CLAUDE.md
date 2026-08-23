@@ -14,7 +14,11 @@ the repo root by GitHub Pages — **anything committed here is public**.
 - `tests/` — `npm test` (plain `node --test`, no test framework).
 
 Because assets use relative paths and ES modules need a real origin, serve the
-folder rather than opening the file: `python3 -m http.server 8000`.
+folder rather than opening the file: `make dev` (see `tools/dev-server.mjs`).
+It serves on `http://localhost:8000/` — spelled `localhost`, because that is the
+hostname Firebase authorizes by default and `127.0.0.1` is not, so Google
+sign-in works on one and not the other. It also 404s a case-wrong path, which a
+case-insensitive macOS filesystem otherwise hides until Pages serves it.
 
 ## The engine
 
