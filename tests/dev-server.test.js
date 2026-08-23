@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { connect } from 'node:net';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, sep } from 'node:path';
 
 import { createDevServer } from '../tools/dev-server.mjs';
 
@@ -146,6 +149,27 @@ test('refuses a path that climbs out of the root', async () => {
       assert.doesNotMatch(res.body, /"name": "yootri"/, `${path} leaked package.json`);
     }
   }, new URL('assets/', ROOT));
+});
+
+/* The containment check compares against the root *plus a separator*. Without
+   it `<base>/root-notes` starts with `<base>/root` as a string, and a directory
+   that merely shares the root's name would be served as if it were inside it —
+   which for this repo means the sibling notes and R&D folders next to it. */
+test('refuses a sibling directory whose name merely starts with the root', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'yootri-devserver-'));
+  try {
+    await mkdir(join(base, 'root'));
+    await mkdir(join(base, 'root-notes'));
+    await writeFile(join(base, 'root-notes', 'secret.txt'), 'not for the browser');
+
+    await withServer(async (port) => {
+      const res = await get(port, '/../root-notes/secret.txt');
+      assert.notEqual(res.status, 200, 'a sibling of the root was served');
+      assert.doesNotMatch(res.body, /not for the browser/, 'the sibling leaked');
+    }, join(base, 'root'));
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
 });
 
 test('rejects a method other than GET or HEAD', async () => {

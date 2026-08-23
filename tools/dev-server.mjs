@@ -71,6 +71,18 @@ function sameOnDisk(file) {
   }
 }
 
+/* A directory serves its own index.html and nothing else — no listing, which
+   would publish the repo's shape, and no fallback to the app, which would turn
+   a typo'd asset path into a page that loads. */
+function directoryIndex(dir) {
+  const index = join(dir, 'index.html');
+  try {
+    const stat = statSync(index);
+    if (stat.isFile()) return sameOnDisk(index) ? { file: index, size: stat.size } : { error: 404 };
+  } catch { /* falls through to 404 */ }
+  return { error: 404 };
+}
+
 /** `{ file, size }` for what `url` names, or `{ error }` with the status to send. */
 function resolveFile(root, url) {
   const raw = url.split('?')[0].split('#')[0];
@@ -87,7 +99,22 @@ function resolveFile(root, url) {
      than staying a literal `..` — which is why the containment check below has
      to happen on the resolved path and not on the string that arrived. */
   const full = resolve(join(root, pathname));
-  if (full !== root && !full.startsWith(root + sep)) return { error: 403 };
+
+  /* The root directory answers from `root` itself, before the prefix test, so
+     that the test can be a single unconditional `startsWith` on everything that
+     goes on to touch the filesystem.
+
+     Written the other way — `full !== root && !full.startsWith(root + sep)` —
+     the rule is the same, but it leaves one branch reaching the filesystem
+     without having passed the prefix test. Nothing escapes through it today;
+     what it costs is that neither a reader nor CodeQL can see containment
+     holding for every path that continues, and a later edit to either half of
+     that condition would not look like it was touching a security boundary.
+
+     The separator matters: `<root>-notes` starts with `<root>` as a string, and
+     this repo has exactly such siblings sitting next to it. */
+  if (full === root) return directoryIndex(root);
+  if (!full.startsWith(root + sep)) return { error: 403 };
 
   let stat;
   try {
@@ -96,17 +123,7 @@ function resolveFile(root, url) {
     return { error: 404 };
   }
 
-  /* A directory serves its own index.html and nothing else — no listing, which
-     would publish the repo's shape, and no fallback to the app, which would
-     turn a typo'd asset path into a page that loads. */
-  if (stat.isDirectory()) {
-    const index = join(full, 'index.html');
-    try {
-      const inner = statSync(index);
-      if (inner.isFile()) return sameOnDisk(index) ? { file: index, size: inner.size } : { error: 404 };
-    } catch { /* falls through to 404 */ }
-    return { error: 404 };
-  }
+  if (stat.isDirectory()) return directoryIndex(full);
 
   return sameOnDisk(full) ? { file: full, size: stat.size } : { error: 404 };
 }
