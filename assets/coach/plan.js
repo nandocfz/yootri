@@ -278,7 +278,7 @@ export const FALLBACK_WEEKS = 16;
 /** A plan id. Unique per record: two plans must never share one, or storing the
     second would overwrite the first. */
 export const mintPlanId = (now = Date.now()) =>
-  `p-${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  `p-${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
 /** Seven rest days: an empty week that still has somewhere to drop a session. */
 const emptyWeek = (idPrefix) =>
