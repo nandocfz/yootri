@@ -608,6 +608,107 @@
   }
   .add-btn:hover { border-color: var(--color-accent); color: var(--color-accent); }
 
+  /* ---- Month calendar ---- */
+
+  .im-calwrap { margin-top: 6px; }
+  .cal-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .cal-hint { font-size: .8rem; color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+
+  .im-cal { display: flex; flex-direction: column; gap: 6px; }
+  /* Seven days plus the week rail. The rail is fixed so the day columns share
+     what is left evenly, whatever the month's longest cell holds. */
+  .cal-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)) 128px; gap: 6px; }
+
+  .cal-headrow { gap: 6px; margin-bottom: -2px; }
+  .cal-dow {
+    font-size: .72rem; letter-spacing: .08em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--color-text) 52%, transparent); padding-left: 4px;
+  }
+  .cal-dow.rail { text-align: right; padding-right: 6px; }
+
+  .cal-day {
+    position: relative; min-height: 92px; padding: 6px 6px 4px;
+    border: 1px solid var(--color-divider); border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .cal-day.out-month { background: transparent; }
+  .cal-day.out-month .cal-dnum { color: color-mix(in srgb, var(--color-text) 34%, transparent); }
+  /* Outside the plan's runway: still drawn, because an event can sit on a date
+     the plan has not reached, but nothing lands there. */
+  .cal-day.out { border-style: dashed; opacity: .62; }
+  .cal-day.today { border-color: var(--color-accent); }
+  .cal-day.drag-over { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+
+  .cal-daytop { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; }
+  .cal-dnum { font-size: .82rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .cal-day.today .cal-dnum { color: var(--color-accent); }
+  .cal-dmins {
+    font-size: .68rem; font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  }
+
+  .cal-evt {
+    display: flex; align-items: center; gap: 4px; width: 100%;
+    padding: 2px 5px; border: 0; border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-text) 12%, transparent);
+    color: var(--color-text); font: inherit; font-size: .7rem; text-align: left;
+    cursor: pointer;
+  }
+  .cal-evt span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cal-evt.goal {
+    background: color-mix(in srgb, var(--color-accent) 26%, transparent);
+    color: color-mix(in srgb, var(--color-accent) 88%, white);
+    font-weight: 600;
+  }
+  .cal-evt:hover { background: color-mix(in srgb, var(--color-accent) 34%, transparent); }
+
+  .cal-chip {
+    display: flex; align-items: center; gap: 2px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--disc-color) 18%, transparent);
+    cursor: grab;
+  }
+  .cal-chip.dragging { opacity: .45; }
+  .cal-chip.is-done { opacity: .58; }
+  .cal-chip-main, .cal-chip-done {
+    display: flex; align-items: center; gap: 3px;
+    padding: 2px 4px; border: 0; background: none; cursor: pointer;
+    color: color-mix(in srgb, var(--disc-color) 88%, white);
+    font: inherit; font-size: .7rem; line-height: 1.3;
+  }
+  .cal-chip-main { flex: 1; min-width: 0; overflow: hidden; }
+  .cal-chip-dur { font-variant-numeric: tabular-nums; }
+  .cal-chip-done { padding-right: 5px; opacity: .75; }
+  .cal-chip-done:hover { opacity: 1; }
+
+  .cal-add {
+    margin-top: auto; align-self: flex-start;
+    padding: 1px 4px; border: 0; border-radius: var(--radius-sm);
+    background: none; color: color-mix(in srgb, var(--color-text) 40%, transparent);
+    font-size: .74rem; cursor: pointer; opacity: 0;
+  }
+  .cal-day:hover .cal-add, .cal-add:focus-visible { opacity: 1; }
+  .cal-add:hover { color: var(--color-accent); }
+
+  .cal-rail {
+    display: flex; flex-direction: column; gap: 2px; justify-content: center;
+    padding: 6px 8px; border: 1px solid var(--color-divider);
+    border-radius: var(--radius-md); background: transparent;
+    color: var(--color-text); font: inherit; text-align: right; cursor: pointer;
+  }
+  .cal-rail.empty { border: 0; cursor: default; }
+  .cal-rail:not(.empty):hover { border-color: var(--color-accent); }
+  .cal-row.sel .cal-rail { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+  .cal-rail-wk { font-size: .74rem; font-weight: 600; }
+  .cal-rail-block { font-size: .68rem; color: color-mix(in srgb, var(--color-text) 58%, transparent); }
+  .cal-rail-vol { font-size: .7rem; font-variant-numeric: tabular-nums; }
+  .cal-rail-bar { height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--color-text) 14%, transparent); overflow: hidden; }
+  .cal-rail-bar i { display: block; height: 100%; background: var(--color-accent); }
+
   /* ---- Chart ---- */
 
   .im-chartcard {
@@ -838,6 +939,10 @@
   .pnl .pnl-sub { margin: 0 0 1rem; font-size: .82rem;
     color: color-mix(in srgb, var(--color-text) 62%, transparent); }
   .pnl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .7rem 1rem; }
+  .pnl-derived {
+    display: flex; align-items: center; min-height: 38px; padding: .1rem .1rem;
+    font-size: .86rem; color: color-mix(in srgb, var(--color-text) 78%, transparent);
+  }
   .pnl-f { display: flex; flex-direction: column; gap: .28rem; font-size: .8rem; }
   .pnl-f > span { color: color-mix(in srgb, var(--color-text) 70%, transparent); }
   .pnl-hint { font-size: .74rem; line-height: 1.45;
@@ -855,6 +960,8 @@
     border-top: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent); }
   .pnl-act { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1.15rem; flex-wrap: wrap; }
   .pnl-act .spacer { margin-right: auto; }
+  .pnl-act .danger { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+  .pnl-act .danger:hover, .pnl-act .danger:focus-visible { color: #e08a6c; }
   .diff-sum { font-size: .86rem; margin: 0 0 .6rem; }
   .diff-list { max-height: 40vh; overflow: auto; margin: 0; padding: 0; list-style: none; }
   .diff-row { display: grid; grid-template-columns: 1fr auto auto; gap: .6rem; align-items: baseline;
@@ -956,6 +1063,23 @@
     .im-boardwrap { overflow-x: visible; }
     .im-board { grid-template-columns: 1fr; min-width: 0; }
     .im-col { min-height: 0; }
+    /* A seven-column month is still the clearest shape on a phone; what does
+       not fit is the text inside a cell, so a chip becomes its colour. */
+    .cal-row { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+    .cal-day { min-height: 62px; padding: 3px; }
+    .cal-dow.rail { display: none; }
+    .cal-chip-dur, .cal-evt span { display: none; }
+    .cal-chip { display: inline-flex; }
+    .cal-evt { width: auto; }
+    .cal-rail {
+      grid-column: 1 / -1; flex-direction: row; align-items: center;
+      justify-content: space-between; gap: 8px; text-align: left; padding: 4px 8px;
+    }
+    /* A week outside the season has nothing to say, and full-width it would be
+       a blank row rather than an empty eighth column. */
+    .cal-rail.empty { display: none; }
+    .cal-rail-bar { flex: 1; }
+    .cal-add { display: none; }
     .im-chartcard { padding: 16px 12px; }
     .im-chartscroll { overflow-x: auto; overflow-y: hidden; }
     .im-chartsvg { min-width: 600px; }
@@ -1069,6 +1193,11 @@
         <i class="ph ph-chat-teardrop-text" aria-hidden="true"></i> Coach
       </button>
 
+      <span class="seg" role="group" aria-label="View" id="view-seg">
+        <label class="seg-opt"><input type="radio" name="view" value="week" />Week</label>
+        <label class="seg-opt"><input type="radio" name="view" value="month" />Month</label>
+      </span>
+
       <div class="wk-nav">
         <button type="button" class="btn btn-secondary btn-icon" id="prev-week" aria-label="Previous week"><i class="ph ph-caret-left"></i></button>
         <span class="wk-pos"><span class="top" id="week-pos"></span><span class="range" id="week-range"></span></span>
@@ -1088,8 +1217,18 @@
 
     <div class="summary" id="summary"></div>
 
-    <div class="im-boardwrap">
+    <div class="im-boardwrap" id="boardwrap">
       <div class="im-board" id="board"></div>
+    </div>
+
+    <div class="im-calwrap hidden" id="calwrap">
+      <div class="cal-bar">
+        <span class="cal-hint">Click a week to open it on the board. Drag a session to any day.</span>
+        <button type="button" class="btn btn-secondary" id="add-event-btn">
+          <i class="ph ph-flag-pennant" aria-hidden="true"></i> Add event
+        </button>
+      </div>
+      <div class="im-cal" id="calendar"></div>
     </div>
 
     <p class="foot-note">Drag a session card between days to reschedule it, or click the pencil to edit its details. Changes save to this device automatically — sign in to sync across devices, or export a plan as a file to keep and reuse as a template. <b>Plan setup</b> fits the whole season to the hours you actually have; it always shows you the changes before anything is written, and <b>Reset week</b> rebuilds a single week from that fit.</p>
@@ -1130,7 +1269,7 @@
      live in assets/coach/ as plain ES modules so they can be unit-tested without
      a browser (`npm test`). This file keeps the markup, styles and DOM. */
   import {
-    loadPlan, blockAt, weekCount, sessionsAt, refit, diffPlans, applyDraft,
+    loadPlan, blockAt, weekCount, sessionsAt, refit, diffPlans, applyDraft, moveSession,
   } from './assets/coach/plan.js';
   import { normalizeProfile, resolveWeekShape, SPREAD_MODES } from './assets/coach/profile.js';
   import { dayBudgets } from './assets/coach/shape.js';
@@ -1149,6 +1288,13 @@
   } from './assets/coach/validate.js';
   import { fitToRace } from './assets/coach/season.js';
   import { weeksUntil } from './assets/coach/dates.js';
+  import {
+    dateOf, monthOf, firstOfMonth, addMonths, monthGrid,
+  } from './assets/coach/calendar.js';
+  import {
+    RACE_TYPES, normalizeEvents, upsertEvent, removeEvent, goalEvent, eventsByDate,
+    raceFieldsOf, seedEventsFromProfile,
+  } from './assets/coach/events.js';
   import { suggest } from './assets/coach/adapt.js';
   import { runTurn } from './assets/coach/agent.js';
   import { PROVIDERS, getProvider, resolveModel } from './assets/coach/providers.js';
@@ -1218,6 +1364,12 @@
   const toISO = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
   const fmtDate = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  /* Dates cross out of the engine as ISO strings and are turned into words
+     here, where the reader's locale is known. Parsing them back with the local
+     parseISO above matters: a UTC-midnight Date formatted locally shows the
+     day before, anywhere west of Greenwich. */
+  const fmtDayISO = (iso) => fmtDate(parseISO(iso));
+  const fmtMonthISO = (iso) => parseISO(iso).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   const defaultStart = () => { const d = new Date(); const since = (d.getDay() + 6) % 7; return toISO(addDays(d, -since)); };
 
   const durToMin = (x) => {
@@ -1321,6 +1473,7 @@
   const state = {
     week: 0, sessions: [],
     done: {}, start: defaultStart(),
+    view: 'week', month: null, events: [],
     chartMode: 'weekly', chartHidden: {},
     dragId: null, editingId: null, hoverIdx: null,
     status: 'Saved on this device', statusError: false,
@@ -1343,6 +1496,20 @@
     state.chartMode = plan.chartmode || 'weekly';
     state.chartHidden = plan.charthidden || {};
     state.sessions = sessionsFor(state.week);
+    state.view = vw.view === 'month' ? 'month' : 'week';
+    state.month = monthOf((vw.month || '') + '-01') || null;
+    state.events = normalizeEvents(plan.events);
+
+    // A plan stored before the calendar existed keeps its race only on the
+    // profile. Turning that into the goal event now means the race is recorded
+    // in one place from here on; written back straight away for the same reason
+    // a schema upgrade is — a later sync must not push the older shape back.
+    if (!state.events.length && plan.profile.raceDate) {
+      state.events = seedEventsFromProfile(plan.profile, { id: 'ev-' + uid4() });
+      plan.events = state.events;
+      savePlanLocal(plan);
+    }
+
     state.dragId = null; state.editingId = null; state.hoverIdx = null;
   }
 
@@ -1352,7 +1519,8 @@
     plan.done = state.done;
     plan.chartmode = state.chartMode;
     plan.charthidden = state.chartHidden;
-    plan.view = { week: state.week };
+    plan.events = state.events;
+    plan.view = { week: state.week, view: state.view, month: state.month };
     plan.updatedAt = now();
     savePlanLocal(plan);
     renderStatus();
@@ -1376,7 +1544,9 @@
     weekPos: $('week-pos'), weekRange: $('week-range'),
     status: $('status'), syncBtn: $('sync-btn'), syncIcon: $('sync-icon'), resetBtn: $('reset-btn'),
     undoBtn: $('undo-btn'),
-    summary: $('summary'), board: $('board'),
+    summary: $('summary'), board: $('board'), boardwrap: $('boardwrap'),
+    calwrap: $('calwrap'), calendar: $('calendar'), viewSeg: $('view-seg'),
+    addEventBtn: $('add-event-btn'),
     chartCompleted: $('chart-completed'), chartmodeSeg: $('chartmode-seg'),
     chartScroll: $('chart-scroll'), chartSvg: $('chart-svg'), chartTip: $('chart-tip'),
     chartLegend: $('chart-legend'), modalRoot: $('modal-root'), dialogRoot: $('dialog-root'),
@@ -1421,9 +1591,21 @@
   }
 
   function renderToolbar() {
+    els.viewSeg.querySelectorAll('input[name="view"]').forEach((r) => { r.checked = r.value === state.view; });
+
+    if (state.view === 'month') {
+      els.weekPos.textContent = fmtMonthISO(firstOfMonth(calMonth()));
+      els.weekRange.textContent = 'Week ' + (state.week + 1) + ' selected';
+      els.prevWeek.setAttribute('aria-label', 'Previous month');
+      els.nextWeek.setAttribute('aria-label', 'Next month');
+      return;
+    }
+
     els.weekPos.textContent = 'Week ' + (state.week + 1) + ' of ' + totalWeeks();
-    const wkMon = addDays(parseISO(state.start), state.week * 7);
-    els.weekRange.textContent = fmtDate(wkMon) + ' – ' + fmtDate(addDays(wkMon, 6));
+    els.weekRange.textContent =
+      fmtDayISO(dateOf(state.start, state.week, 'Mon')) + ' – ' + fmtDayISO(dateOf(state.start, state.week, 'Sun'));
+    els.prevWeek.setAttribute('aria-label', 'Previous week');
+    els.nextWeek.setAttribute('aria-label', 'Next week');
   }
 
   // A failed local write outranks every routine message — otherwise the very next
@@ -1519,19 +1701,19 @@
   }
 
   function renderBoard() {
-    const startDate = parseISO(state.start);
-    const weekStart0 = state.week;
     const todayISO = toISO(new Date());
 
-    els.board.innerHTML = DAYS.map((day, di) => {
-      const date = addDays(startDate, weekStart0 * 7 + di);
-      const isToday = toISO(date) === todayISO;
+    els.board.innerHTML = DAYS.map((day) => {
+      // Same mapping the month grid uses, so the two cannot disagree about
+      // which date a session sits on.
+      const iso = dateOf(state.start, state.week, day);
+      const isToday = iso === todayISO;
       const dayItems = state.sessions.filter((s) => s.day === day);
       const mins = dayItems.reduce((a, s) => a + durToMin(s.dur), 0);
       return (
         '<div class="im-col' + (isToday ? ' today' : '') + '" data-day="' + day + '">' +
           '<div class="col-head">' +
-            '<span class="left"><span class="day">' + day + '</span><span class="date">' + fmtDate(date) + '</span>' +
+            '<span class="left"><span class="day">' + day + '</span><span class="date">' + fmtDayISO(iso) + '</span>' +
             (isToday ? '<span class="today-pill">Today</span>' : '') + '</span>' +
             '<span class="total">' + fmtTotal(mins) + '</span>' +
           '</div>' +
@@ -1541,6 +1723,122 @@
         '</div>'
       );
     }).join('');
+  }
+
+  /* ---- Month calendar ----------------------------------------------------
+     The same sessions the board shows, laid out on real dates, one row per
+     plan week. A month reaches past both ends of the season — that is the
+     point, since an event can sit on a date the plan has not been built for
+     yet — so a day carries its week only when it has one. */
+
+  const calMonth = () =>
+    state.month || monthOf(dateOf(state.start, state.week, 'Mon')) || monthOf(toISO(new Date()));
+
+  function calChipHTML(s) {
+    const meta = DISC[s.disc] || {};
+    const color = meta.color || 'var(--color-neutral-500)';
+    const isDone = !!state.done[s.id];
+    const label = (s.focus && s.focus.trim()) || s.disc;
+    return (
+      '<span class="cal-chip' + (isDone ? ' is-done' : '') + '" draggable="true" data-id="' + esc(s.id) + '"' +
+        ' style="--disc-color: ' + color + ';">' +
+        '<button type="button" class="cal-chip-main" data-act="edit" data-id="' + esc(s.id) + '"' +
+          ' title="' + esc(label + ' · ' + s.dur) + '">' +
+          '<i class="ph ' + (meta.icon || 'ph-circle') + '" aria-hidden="true"></i>' +
+          '<span class="cal-chip-dur">' + esc(s.dur) + '</span>' +
+        '</button>' +
+        '<button type="button" class="cal-chip-done" data-act="done" data-id="' + esc(s.id) + '"' +
+          ' aria-label="' + (isDone ? 'Mark not done' : 'Mark done') + '">' +
+          '<i class="ph ' + (isDone ? 'ph-check-circle' : 'ph-circle') + '" aria-hidden="true"></i>' +
+        '</button>' +
+      '</span>'
+    );
+  }
+
+  function calEventHTML(ev) {
+    const label = ev.name || (ev.kind === 'race' ? 'Race' : 'Event');
+    return (
+      '<button type="button" class="cal-evt' + (ev.goal ? ' goal' : '') + '" data-act="event"' +
+        ' data-id="' + esc(ev.id) + '" title="' + esc(label) + '">' +
+        '<i class="ph ' + (ev.kind === 'race' ? 'ph-flag-checkered' : 'ph-bookmark-simple') + '" aria-hidden="true"></i>' +
+        '<span>' + esc(label) + '</span>' +
+      '</button>'
+    );
+  }
+
+  function calRailHTML(absWeek) {
+    if (absWeek == null) return '<span class="cal-rail empty"></span>';
+    const info = weekInfo(absWeek);
+    const c = weekCompliance(plan, absWeek);
+    const pct = Math.min(100, Math.round((c.ratio || 0) * 100));
+    return (
+      '<button type="button" class="cal-rail" data-act="week" data-week="' + absWeek + '">' +
+        '<span class="cal-rail-wk">Week ' + (absWeek + 1) + '</span>' +
+        '<span class="cal-rail-block">' + esc(info.block) + (info.recovery ? ' · easy' : '') + '</span>' +
+        '<span class="cal-rail-vol">' + (fmtTotal(c.plannedMinutes) || 'Rest') + '</span>' +
+        '<span class="cal-rail-bar"><i style="width: ' + pct + '%"></i></span>' +
+      '</button>'
+    );
+  }
+
+  function renderCalendar() {
+    const month = calMonth();
+    const grid = monthGrid(month, { startISO: state.start, weeks: totalWeeks() });
+    if (!grid) { els.calendar.innerHTML = ''; return; }
+
+    // Every session the season holds, filed under the date it falls on. Built
+    // once rather than per cell: a month draws 42 days, and most of them are
+    // looking into the same handful of weeks.
+    const byDay = {};
+    for (const w of plan.season) {
+      for (const s of plan.weeks['w' + w.absWeek] || []) {
+        if (durToMin(s.dur) <= 0) continue;
+        const iso = dateOf(state.start, w.absWeek, s.day);
+        if (iso) (byDay[iso] = byDay[iso] || []).push(s);
+      }
+    }
+    const byDate = eventsByDate(state.events);
+    const todayISO = toISO(new Date());
+
+    const head = '<div class="cal-row cal-headrow">' +
+      DAYS.map((d) => '<span class="cal-dow">' + d + '</span>').join('') +
+      '<span class="cal-dow rail">Week</span></div>';
+
+    const rows = grid.rows.map((row) => {
+      const cells = row.days.map((d) => {
+        const sessions = byDay[d.iso] || [];
+        const mins = sessions.reduce((a, x) => a + durToMin(x.dur), 0);
+        const cls = 'cal-day' + (d.inMonth ? '' : ' out-month') + (d.inPlan ? '' : ' out') +
+          (d.iso === todayISO ? ' today' : '');
+        return (
+          '<div class="' + cls + '" data-date="' + d.iso + '"' +
+            (d.inPlan ? ' data-week="' + d.absWeek + '" data-day="' + d.day + '"' : '') + '>' +
+            '<div class="cal-daytop">' +
+              '<span class="cal-dnum">' + Number(d.iso.slice(8, 10)) + '</span>' +
+              (mins ? '<span class="cal-dmins">' + fmtTotal(mins) + '</span>' : '') +
+            '</div>' +
+            (byDate[d.iso] || []).map(calEventHTML).join('') +
+            sessions.map(calChipHTML).join('') +
+            (d.inPlan
+              ? '<button type="button" class="cal-add" data-act="add" data-date="' + d.iso + '"' +
+                ' aria-label="Add a session"><i class="ph ph-plus" aria-hidden="true"></i></button>'
+              : '') +
+          '</div>'
+        );
+      }).join('');
+
+      return '<div class="cal-row' + (row.absWeek === state.week ? ' sel' : '') + '">' +
+        cells + calRailHTML(row.absWeek) + '</div>';
+    }).join('');
+
+    els.calendar.innerHTML = head + rows;
+  }
+
+  function stepMonth(n) {
+    state.month = addMonths(calMonth(), n);
+    persistPlan();
+    renderToolbar();
+    renderViewBody();
   }
 
   /* ---- Chart ---- */
@@ -1760,7 +2058,7 @@
   function renderModal() {
     const id = state.editingId;
     if (id == null) { els.modalRoot.innerHTML = ''; return; }
-    const s = state.sessions.find((x) => x.id === id);
+    const s = sessionById(id);
     if (!s) { els.modalRoot.innerHTML = ''; return; }
     const opts = Object.keys(DISC).map((d) =>
       '<option value="' + d + '"' + (d === s.disc ? ' selected' : '') + '>' + d + '</option>').join('');
@@ -1900,6 +2198,14 @@
     });
   }
 
+  /* The body of the page is one of two views onto the same weeks. */
+  function renderViewBody() {
+    const month = state.view === 'month';
+    els.boardwrap.classList.toggle('hidden', month);
+    els.calwrap.classList.toggle('hidden', !month);
+    if (month) renderCalendar(); else renderBoard();
+  }
+
   function renderAll() {
     renderOrientation();
     renderHeader();
@@ -1908,7 +2214,7 @@
     renderStatus();
     renderAdvice();
     renderSummary();
-    renderBoard();
+    renderViewBody();
     renderChart();
   }
 
@@ -2281,6 +2587,154 @@
   const field = (label, control) =>
     '<label class="pnl-f"><span>' + label + '</span>' + control + '</label>';
 
+  /* The race date is the goal event's, so this form shows it rather than
+     offering a second place to set it. */
+  function goalEventLabel() {
+    const goal = goalEvent(state.events);
+    if (!goal) return 'No goal event yet — add one in Month view';
+    return esc((goal.name || 'Race') + ' · ' + fmtLongDate(goal.date));
+  }
+
+  /* ---- Events ------------------------------------------------------------
+     The goal event is the one the season is aimed at, so editing it is a plan
+     change and goes through the same review the Plan setup form does. Every
+     other event is a note on the calendar and is written straight away. */
+
+  const LONG_RUNWAY_WEEKS = 30;
+
+  function openEventPanel(id) {
+    const existing = state.events.find((x) => x.id === id) || null;
+    const ev = existing || {
+      id: 'ev-' + uid4(),
+      name: '',
+      date: dateOf(state.start, state.week, 'Sat') || state.start,
+      kind: 'race',
+      raceType: plan.profile.raceType,
+      goal: !goalEvent(state.events),
+      note: '',
+    };
+    const typeOpts = RACE_TYPES
+      .map((o) => '<option value="' + o + '"' + (o === (ev.raceType || plan.profile.raceType) ? ' selected' : '') + '>' + o + '</option>')
+      .join('');
+    const kindOpts = '<option value="race"' + (ev.kind === 'race' ? ' selected' : '') + '>Race</option>' +
+      '<option value="other"' + (ev.kind === 'race' ? '' : ' selected') + '>Something else</option>';
+
+    panelShell(
+      '<h2>' + (existing ? 'Edit event' : 'Add event') + '</h2>' +
+      '<p class="pnl-sub">Anything worth seeing next to the training. Mark one as the event the season is built around.</p>' +
+      '<div class="pnl-grid">' +
+        field('Name', '<input type="text" class="input" id="ev-name" value="' + esc(ev.name) + '" placeholder="e.g. Ironman Cascais" />') +
+        field('Date', '<input type="date" class="input" id="ev-date" value="' + esc(ev.date) + '" />') +
+        field('Kind', '<select class="input" id="ev-kind">' + kindOpts + '</select>') +
+        field('Race distance', '<select class="input" id="ev-type">' + typeOpts + '</select>') +
+      '</div>' +
+      '<label class="np-check" id="ev-goal-row"><input type="checkbox" id="ev-goal"' + (ev.goal ? ' checked' : '') + ' />' +
+        '<span>Build the season around this event</span></label>' +
+      '<p class="pnl-hint" id="ev-hint"></p>' +
+      '<div class="pnl-act">' +
+        (existing ? '<button type="button" class="btn btn-ghost spacer danger" id="ev-del"><i class="ph ph-trash"></i> Delete</button>' : '') +
+        '<button type="button" class="btn btn-ghost" id="ev-cancel">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" id="ev-save">Save event</button>' +
+      '</div>',
+      existing ? 'Edit event' : 'Add event',
+    );
+
+    const sync = () => {
+      const isRace = $('ev-kind').value === 'race';
+      // Only a race can size a season, so the distance and the goal flag are
+      // meaningless on anything else.
+      $('ev-type').closest('.pnl-f').classList.toggle('hidden', !isRace);
+      $('ev-goal-row').classList.toggle('hidden', !isRace);
+      if (!isRace) $('ev-goal').checked = false;
+      renderEventHint();
+    };
+    $('ev-kind').addEventListener('change', sync);
+    $('ev-date').addEventListener('change', renderEventHint);
+    $('ev-goal').addEventListener('change', renderEventHint);
+    $('ev-cancel').addEventListener('click', closePanel);
+    $('ev-save').addEventListener('click', () => saveEventFromPanel(ev.id));
+    if (existing) $('ev-del').addEventListener('click', () => applyEvents(removeEvent(state.events, ev.id)));
+    sync();
+    $('ev-name').focus();
+  }
+
+  /* What building the season around this date would mean, said before the
+     athlete commits to it rather than after. */
+  function renderEventHint() {
+    const el = $('ev-hint');
+    if (!el) return;
+    const date = $('ev-date').value;
+    const goal = $('ev-goal').checked && $('ev-kind').value === 'race';
+    if (!goal || !date) { el.innerHTML = ''; return; }
+
+    const weeks = weeksUntil(state.start, date);
+    if (!weeks) { el.innerHTML = ''; return; }
+    if (parseISO(date) < parseISO(state.start)) {
+      el.innerHTML = 'That date is before this plan starts, so the season cannot be built towards it. ' +
+        'Move the start date, or start a new plan.';
+      return;
+    }
+    el.innerHTML = 'The season becomes <b>' + weeks + ' weeks</b> long, ending on this date.' +
+      (weeks > LONG_RUNWAY_WEEKS
+        ? ' That is a long runway: the early weeks come out as a repeat of the first block rather ' +
+          'than a shape built for it, so it is worth starting a plan closer to the date instead.'
+        : '');
+  }
+
+  function saveEventFromPanel(id) {
+    const date = $('ev-date').value;
+    if (!date) { $('ev-hint').innerHTML = 'An event needs a date.'; return; }
+    const kind = $('ev-kind').value;
+    applyEvents(upsertEvent(state.events, {
+      id,
+      name: $('ev-name').value,
+      date,
+      kind,
+      raceType: kind === 'race' ? $('ev-type').value : null,
+      goal: kind === 'race' && $('ev-goal').checked,
+    }));
+  }
+
+  /**
+   * Write an edited event list. When it changes which race the season is aimed
+   * at, that is a plan change: it builds a draft and shows the same review the
+   * setup form does. Otherwise the list is just written.
+   */
+  function applyEvents(next) {
+    const goal = goalEvent(next);
+    const race = raceFieldsOf(next);
+    const movesTheSeason = !!goal &&
+      (race.raceDate !== plan.profile.raceDate ||
+        (!!race.raceType && race.raceType !== plan.profile.raceType));
+
+    if (!movesTheSeason) {
+      state.events = next;
+      // With no goal event the profile must stop claiming a race, or the next
+      // load would seed the event straight back from it. The season itself is
+      // left alone: those weeks are already built and already trained.
+      if (!goal) plan.profile = normalizeProfile({ ...plan.profile, raceDate: null });
+      closePanel();
+      persistPlan();
+      renderAll();
+      setStatus(goal ? 'Event saved' : 'Event removed');
+      return;
+    }
+
+    const profile = normalizeProfile({
+      ...plan.profile,
+      raceDate: race.raceDate,
+      ...(race.raceType ? { raceType: race.raceType } : {}),
+    });
+    draft = refit(plan, { profile, weeks: weeksUntil(state.start, race.raceDate) ?? FALLBACK_WEEKS });
+    draft.events = next;
+
+    const d = diffPlans(plan, draft);
+    // Review disables Apply when no week changes, which would strand the event
+    // edit — so when only the date moved, write it straight through.
+    if (!d.weeks.length) applyRefit();
+    else renderDiff(d, () => openEventPanel(goal.id));
+  }
+
   /* ---- About & disclaimer ----
 
      The substance here is deliberate and is not to be softened or shortened. It
@@ -2398,7 +2852,7 @@
       DAYS.map((d) => opt(d, 'Go to ' + d, shape.spread === d)).join('');
     const swimCap = (p.constraints.find((c) => c.disc === 'Swim' && c.rule === 'maxPerWeek') || {}).value;
     const planned = plan.season.reduce((a, w) => a + Math.round(w.hours * 60), 0);
-    const opts = ['sprint', 'olympic', '70.3', 'ironman']
+    const opts = RACE_TYPES
       .map((o) => '<option value="' + o + '"' + (o === p.raceType ? ' selected' : '') + '>' + o + '</option>')
       .join('');
 
@@ -2407,7 +2861,7 @@
       '<p class="pnl-sub">Fit the season to the time you actually have. Nothing changes until you review it.</p>' +
       '<div class="pnl-grid">' +
         field('Annual hours', '<input type="number" class="input" id="f-annual" min="50" max="2000" step="10" value="' + Math.round(p.annualHours) + '" />') +
-        field('Race date', '<input type="date" class="input" id="f-race" value="' + esc(p.raceDate || '') + '" />') +
+        field('Race date', '<span class="pnl-derived" id="f-race">' + goalEventLabel() + '</span>') +
         field('Race distance', '<select class="input" id="f-race-type">' + opts + '</select>') +
         field('Max swims / week', '<input type="number" class="input" id="f-swimcap" min="0" max="7" step="1" value="' + (swimCap ?? '') + '" placeholder="no limit" />') +
       '</div>' +
@@ -2546,15 +3000,20 @@
 
     const profile = normalizeProfile({
       ...setupProfile(),
-      raceDate: $('f-race').value || null,
+      // The date belongs to the goal event now; this form cannot move it, so
+      // the season's length cannot change here either.
+      raceDate: raceFieldsOf(state.events).raceDate,
       constraints,
     });
 
     draft = refit(plan, { profile });
+    // The distance is still set here, and the goal event holds one too — write
+    // it across so the two can never disagree about the same race.
+    draft.events = state.events.map((e) => (e.goal ? { ...e, raceType: profile.raceType } : e));
     renderDiff(diffPlans(plan, draft));
   }
 
-  function renderDiff(d) {
+  function renderDiff(d, onBack = openSetupPanel) {
     const rows = d.weeks.map((w) => {
       const dir = w.deltaMinutes > 0 ? 'up' : (w.deltaMinutes < 0 ? 'down' : '');
       const sign = w.deltaMinutes > 0 ? '+' : '−';
@@ -2605,7 +3064,7 @@
           (d.blocked || !d.weeks.length ? ' disabled' : '') + '>Apply</button>' +
       '</div>',
     );
-    $('d-back').addEventListener('click', openSetupPanel);
+    $('d-back').addEventListener('click', onBack);
     $('d-cancel').addEventListener('click', closePanel);
     if (!d.blocked && d.weeks.length) $('d-apply').addEventListener('click', applyRefit);
   }
@@ -2646,13 +3105,82 @@
     renderAll();
   }
 
+  /* Session edits are addressed by id, and write whichever week actually holds
+     the session. The month grid shows the weeks either side of the one on the
+     board, so "the week being looked at" stopped being a safe assumption for
+     where an edit lands — state.sessions is only the board's cache of it. */
+
+  function locateSession(id) {
+    for (const w of plan.season) {
+      const sessions = plan.weeks['w' + w.absWeek];
+      if (sessions && sessions.some((s) => s.id === id)) {
+        return { absWeek: w.absWeek, sessions: sessions.slice() };
+      }
+    }
+    return null;
+  }
+
+  const sessionById = (id) => (locateSession(id)?.sessions || []).find((s) => s.id === id) || null;
+
+  /* The one place a week is written. Re-reads the board's week from the plan
+     afterwards rather than assuming it was the week that changed. */
+  function writeWeek(absWeek, sessions) {
+    setWeekSessions(absWeek, sessions);
+    persistPlan();
+    state.sessions = sessionsFor(state.week);
+    renderSummary();
+    renderViewBody();
+    renderChart();
+  }
+
   function persistSessions(sessions) {
-    state.sessions = sessions;
-    setWeekSessions(state.week, sessions);
+    writeWeek(state.week, sessions);
+  }
+
+  function updateSession(id, patch) {
+    const at = locateSession(id);
+    if (!at) return;
+    writeWeek(at.absWeek, at.sessions.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }
+
+  function deleteSession(id) {
+    const at = locateSession(id);
+    if (!at) return;
+    writeWeek(at.absWeek, at.sessions.filter((s) => s.id !== id));
+  }
+
+  /* A completion flag is plan-level and keyed by session id, so it needs no
+     week at all — but the summary, the grid and the chart all read it. */
+  function toggleDone(id) {
+    state.done = { ...state.done, [id]: !state.done[id] };
     persistPlan();
     renderSummary();
-    renderBoard();
+    renderViewBody();
     renderChart();
+  }
+
+  /* Moving a session in the month grid can cross a week boundary, which the
+     board's own drag never could. moveSession re-mints the id when it does and
+     carries the tick and the log with it, so `done` has to be re-read from the
+     plan before persistPlan folds state back into it. */
+  function moveSessionTo(id, absWeek, day) {
+    const before = plan;
+    plan = moveSession(plan, { id, toWeek: absWeek, day });
+    if (plan === before) return;
+    state.done = plan.done;
+    persistPlan();
+    state.sessions = sessionsFor(state.week);
+    renderSummary();
+    renderViewBody();
+    renderChart();
+  }
+
+  function addSessionAt(absWeek, day) {
+    const id = 'cus-' + uid4();
+    const blank = { d: day, day, disc: 'Swim', focus: '', dur: '0:30', zone: 'Z2', desc: '', id, custom: true };
+    writeWeek(absWeek, [...sessionsFor(absWeek), blank]);
+    state.editingId = id;
+    renderModal();
   }
 
   /* ---- Status ---- */
@@ -3269,8 +3797,26 @@
   els.setupBtn.addEventListener('click', openSetupPanel);
   els.coachBtn.addEventListener('click', openCoach);
   els.aboutBtn.addEventListener('click', openAboutPanel);
-  els.prevWeek.addEventListener('click', () => { if (state.week > 0) select(state.week - 1); });
-  els.nextWeek.addEventListener('click', () => { if (state.week < totalWeeks() - 1) select(state.week + 1); });
+  // The one pair of arrows serves whichever view is on screen.
+  els.prevWeek.addEventListener('click', () => {
+    if (state.view === 'month') stepMonth(-1);
+    else if (state.week > 0) select(state.week - 1);
+  });
+  els.nextWeek.addEventListener('click', () => {
+    if (state.view === 'month') stepMonth(1);
+    else if (state.week < totalWeeks() - 1) select(state.week + 1);
+  });
+
+  els.viewSeg.addEventListener('change', (e) => {
+    if (e.target.name !== 'view') return;
+    state.view = e.target.value === 'month' ? 'month' : 'week';
+    // Open the month the selected week is in, rather than wherever the athlete
+    // last browsed to.
+    if (state.view === 'month') state.month = monthOf(dateOf(state.start, state.week, 'Mon'));
+    persistPlan();
+    renderToolbar();
+    renderViewBody();
+  });
   els.syncBtn.addEventListener('click', () => {
     if (cloudReady() && authUser) {
       els.syncIcon.classList.add('spinning');
@@ -3300,30 +3846,14 @@
         state.editingId = id;
         renderModal();
       } else if (act.dataset.act === 'delete') {
-        persistSessions(state.sessions.filter((s) => s.id !== id));
+        deleteSession(id);
       } else if (act.dataset.act === 'done') {
-        state.done = { ...state.done, [id]: !state.done[id] };
-        persistPlan();
-        renderSummary();
-        renderBoard();
-        renderChart();
+        toggleDone(id);
       }
       return;
     }
     const add = e.target.closest('.add-btn');
-    if (add) {
-      const day = add.dataset.day;
-      const id = 'cus-' + uid4();
-      const sessions = [...state.sessions, { d: day, day, disc: 'Swim', focus: '', dur: '0:30', zone: 'Z2', desc: '', id, custom: true }];
-      state.sessions = sessions;
-      setWeekSessions(state.week, sessions);
-      persistPlan();
-      state.editingId = id;
-      renderSummary();
-      renderBoard();
-      renderChart();
-      renderModal();
-    }
+    if (add) addSessionAt(state.week, add.dataset.day);
   });
 
   // Board: drag & drop. Columns are highlighted by toggling classes directly
@@ -3360,6 +3890,65 @@
     if (!id) return;
     persistSessions(state.sessions.map((s) => (s.id === id ? { ...s, day: col.dataset.day } : s)));
   });
+
+  /* Calendar: the same data-act vocabulary the board speaks, so a chip behaves
+     like a card. The one thing the board cannot do is move a session to a
+     different week — see moveSessionTo. */
+  els.calendar.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-act]');
+    if (!act) return;
+    const kind = act.dataset.act;
+    if (kind === 'edit') {
+      state.editingId = act.dataset.id;
+      renderModal();
+    } else if (kind === 'done') {
+      toggleDone(act.dataset.id);
+    } else if (kind === 'add') {
+      const cell = act.closest('.cal-day');
+      addSessionAt(Number(cell.dataset.week), cell.dataset.day);
+    } else if (kind === 'event') {
+      openEventPanel(act.dataset.id);
+    } else if (kind === 'week') {
+      state.view = 'week';
+      select(Number(act.dataset.week));
+    }
+  });
+
+  els.calendar.addEventListener('dragstart', (e) => {
+    const chip = e.target.closest('.cal-chip');
+    if (!chip) return;
+    state.dragId = chip.dataset.id;
+    chip.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', chip.dataset.id); } catch (err) {}
+  });
+  els.calendar.addEventListener('dragend', () => {
+    state.dragId = null;
+    els.calendar.querySelectorAll('.drag-over').forEach((c) => c.classList.remove('drag-over'));
+    els.calendar.querySelectorAll('.dragging').forEach((c) => c.classList.remove('dragging'));
+  });
+  els.calendar.addEventListener('dragover', (e) => {
+    // Only days the plan actually covers take a drop: a session cannot land
+    // before the season starts or after it ends.
+    const cell = e.target.closest('.cal-day[data-week]');
+    if (!cell || !state.dragId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (!cell.classList.contains('drag-over')) {
+      els.calendar.querySelectorAll('.drag-over').forEach((c) => c.classList.remove('drag-over'));
+      cell.classList.add('drag-over');
+    }
+  });
+  els.calendar.addEventListener('drop', (e) => {
+    const cell = e.target.closest('.cal-day[data-week]');
+    if (!cell) return;
+    e.preventDefault();
+    const id = state.dragId || e.dataTransfer.getData('text/plain');
+    state.dragId = null;
+    if (id) moveSessionTo(id, Number(cell.dataset.week), cell.dataset.day);
+  });
+
+  els.addEventBtn.addEventListener('click', () => openEventPanel(null));
 
   // Chart: hover, mode toggle, legend
   function hoverFromEvent(e) {
@@ -3412,7 +4001,7 @@
       // Pre-fill the planned duration when a session is marked as happening, so
       // "partial" is an edit-down rather than a blank box.
       const field = els.modalRoot.querySelector('#ed-actual');
-      const s = state.sessions.find((x) => x.id === state.editingId);
+      const s = sessionById(state.editingId);
       const plannedMin = s ? durToMin(s.dur) : 0;
       const happened = st.dataset.status === 'done' || st.dataset.status === 'partial';
       if (field && plannedMin && happened && !field.value) field.value = minToDur(plannedMin);
@@ -3431,21 +4020,20 @@
       const dur = get('#ed-dur').trim() || '—';
       const zone = get('#ed-zone').trim() || '—';
       const log = readLogFromModal();
-      const next = state.sessions.map((s) => (s.id === id
-        ? { ...s, disc: get('#ed-disc'), focus: get('#ed-focus'), dur, zone, desc: get('#ed-desc') }
-        : s));
       state.editingId = null;
       renderModal();
       // The log lives on the plan, not on the session, so write it before the
-      // session edit persists — persistSessions re-renders from `plan`.
+      // session edit persists — updateSession re-renders from `plan`.
       plan = setActual(plan, id, log);
       state.done = plan.done;
-      persistSessions(next);
+      updateSession(id, {
+        disc: get('#ed-disc'), focus: get('#ed-focus'), dur, zone, desc: get('#ed-desc'),
+      });
     } else if (act.dataset.act === 'modal-delete') {
       const id = state.editingId;
       state.editingId = null;
       renderModal();
-      persistSessions(state.sessions.filter((s) => s.id !== id));
+      deleteSession(id);
     }
   });
   document.addEventListener('keydown', (e) => {

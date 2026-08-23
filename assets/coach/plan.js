@@ -17,6 +17,7 @@ import { validateSeason } from './validate.js';
 import { durToMin, REST_DUR } from './duration.js';
 import { DAYS } from './profile.js';
 import { weeksUntil } from './dates.js';
+import { seedEventsFromProfile } from './events.js';
 
 const clone = (x) => structuredClone(x);
 const weekKey = (absWeek) => `w${absWeek}`;
@@ -50,6 +51,73 @@ export function sessionsAt(plan, absWeek) {
 export function setSessionsAt(plan, absWeek, sessions) {
   const next = clone(plan);
   next.weeks[weekKey(clampWeek(plan, absWeek))] = clone(sessions);
+  return next;
+}
+
+/** An id for a session that has moved week. Deliberately unlike the generated
+    `w{week}-{n}` ids, so regenerating the week it left cannot mint the same one
+    a second time. */
+const mintSessionId = (now = Date.now()) =>
+  `mv-${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/**
+ * Move a session onto a given week and weekday. Returns a new plan; the input
+ * is untouched. Anything it cannot do — an id nothing holds, a week past the
+ * end of the season, a weekday that does not exist — gives back the plan
+ * exactly as it was: a drag that lands nowhere should do nothing, rather than
+ * something approximate.
+ *
+ * Crossing a week boundary re-mints the session id and carries its completion
+ * flag and logged actual across. That is not tidiness. Generated ids are
+ * `w{week}-{n}`, so a session dragged out of week 3 still holds a week-3 id;
+ * "Reset week" on week 3 mints that id again, and `done`, `actuals` and
+ * `diffPlans` are all keyed by id — two live sessions sharing one silently
+ * merges their history.
+ *
+ * @param {object} plan
+ * @param {object} opts
+ * @param {string} opts.id       session to move
+ * @param {number} opts.toWeek   destination absolute week
+ * @param {string} opts.day      destination weekday name
+ * @param {function} [opts.mintId] injectable, so a test can name the new id
+ */
+export function moveSession(plan, { id, toWeek, day, mintId = mintSessionId } = {}) {
+  const target = Number(toWeek);
+  if (!DAYS.includes(day)) return plan;
+  if (!Number.isInteger(target) || target < 0 || target >= weekCount(plan)) return plan;
+
+  let from = null;
+  for (const [key, sessions] of Object.entries(plan.weeks ?? {})) {
+    if ((sessions ?? []).some((s) => s && s.id === id)) {
+      from = Number(String(key).slice(1));
+      break;
+    }
+  }
+  if (!Number.isInteger(from)) return plan;
+
+  const next = clone(plan);
+
+  // Within one week only the day changes, so the id — and every reference to
+  // it — can stay exactly where it is.
+  if (from === target) {
+    next.weeks[weekKey(target)] = next.weeks[weekKey(target)]
+      .map((s) => (s.id === id ? { ...s, day } : s));
+    return next;
+  }
+
+  const session = next.weeks[weekKey(from)].find((s) => s.id === id);
+  next.weeks[weekKey(from)] = next.weeks[weekKey(from)].filter((s) => s.id !== id);
+
+  const movedId = String(mintId());
+  next.weeks[weekKey(target)] = [...(next.weeks[weekKey(target)] ?? []), { ...session, id: movedId, day }];
+
+  for (const store of ['done', 'actuals']) {
+    if (next[store] && id in next[store]) {
+      next[store][movedId] = next[store][id];
+      delete next[store][id];
+    }
+  }
+
   return next;
 }
 
@@ -264,6 +332,9 @@ export function newPlan({
     profile: base,
     season,
     weeks: built,
+    // The race the season was built for is also the first thing on the
+    // calendar, so there is one place it is recorded rather than two.
+    events: seedEventsFromProfile(base, { id: `ev-${now.toString(36)}` }),
     done: {},
     actuals: {},
     chat: [],

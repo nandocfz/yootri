@@ -28,11 +28,20 @@ folder rather than opening the file: `python3 -m http.server 8000`.
 | `migrate.js` | Schema v2 → v3. `legacy-plan.js` is the frozen old template it needs. |
 | `portable.js` | The plan-file envelope: what `exportPlan` writes and what `Import plan…` will accept. Import is total — every bad file comes back as a reason, never a throw. |
 | `duration.js` | `"H:MM"` ↔ minutes, the format the app already stores. |
+| `calendar.js` | Week-and-weekday ↔ real date, and the Monday-start month grid the calendar view draws. |
+| `events.js` | The athlete's events. One is the *goal event*, and it is the only source of the plan's race date and distance. |
 
 **Nothing edits a stored plan in place.** A change builds a *draft* (a detached
 copy), which is diffed, validated, shown, and only written by `applyDraft`. That
 is what makes it safe to point an agent at a training plan, and it is why the
 Plan setup form goes through the same ceremony a model would.
+
+Events live on the plan as `events`, alongside `weekBudgets` — both are fields
+added without a schema bump, because `migratePlan` passes a v3 record through
+untouched and export/import/sync all carry unknown top-level fields. The one
+event flagged `goal` owns `profile.raceDate` and `profile.raceType`; moving it
+re-fits the season through the same draft → diff → apply flow the setup form
+uses, which is why Plan setup only *shows* the race date.
 
 Plans are schema v3: absolute week keys (`w0`…`w15`), materialized sessions, and
 a stored `season`. A plan is self-contained, so changing the engine never
