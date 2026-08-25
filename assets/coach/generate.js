@@ -12,6 +12,7 @@
 import { DAYS, allowedDays, maxPerWeek } from './profile.js';
 import { minToDur, durToMin, REST_DUR } from './duration.js';
 import { dayBudgets } from './shape.js';
+import { ZONE_FOR_LABEL } from './paces.js';
 
 const MIN_SESSION = 20; // below this it isn't a session, it's a gesture
 const ROUND_TO = 5;
@@ -81,6 +82,18 @@ const ZONE = {
   Run: { Prep: 'Z2', Base: 'Z2', Build: 'Z3–Z4', Peak: 'Z3', Race: 'Z1–Z2' },
   Strength: { Prep: '—', Base: '—', Build: '—', Peak: '—', Race: '—' },
 };
+
+/* The pace band a Run session is asking for, so a card can turn it into real
+   minutes-per-kilometre against whatever benchmark the athlete has now.
+
+   Derived from the session's own zone label rather than from a second block
+   table. A card reading "Z3–Z4" beside a band saying "easy" would be the app
+   disagreeing with itself in the space of one line, and a second table is how
+   that happens. It also means a zone edited by hand — or by the coach — carries
+   the matching pace without anything else being told.
+
+   Running only. A swim marked Z3 is not a threshold run. */
+const paceZoneFor = (disc, zone) => (disc === 'Run' ? ZONE_FOR_LABEL[zone] : undefined);
 
 /** Map a block name onto its family, so "Base 1".."Base 3" share one shape. */
 export function blockFamily(block) {
@@ -329,13 +342,18 @@ export function generateWeek({ hours, block, profile, idPrefix = 'w' }) {
 
   for (const day of DAYS) {
     for (const s of work.filter((x) => x.day === day)) {
+      const zone = ZONE[s.disc][family];
+      const paceZone = paceZoneFor(s.disc, zone);
       sessions.push({
         id: '',
         day,
         disc: s.disc,
         focus: FOCUS[s.disc][family],
         dur: minToDur(s.minutes),
-        zone: ZONE[s.disc][family],
+        zone,
+        // Absent rather than undefined on everything that is not a run, so a
+        // stored session carries no field it has no use for.
+        ...(paceZone ? { paceZone } : {}),
       });
     }
     if (!busy.has(day)) {

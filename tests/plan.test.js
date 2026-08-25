@@ -434,3 +434,77 @@ test('a new plan with no race date starts with an empty calendar', () => {
   const p = newPlan({ name: 'Base', startISO: '2026-08-17', now: 1 });
   assert.deepEqual(p.events, []);
 });
+
+/* ---- benchmarks -------------------------------------------------------
+
+   A benchmark is the running result every pace on a Run card is derived from.
+   It rides on the plan as a top-level field, the way `events` and `weekBudgets`
+   do, so a v3 record passes through `migratePlan` carrying it untouched. */
+
+const bm = (over = {}) => ({
+  id: 'bm-1', date: '2026-06-15', distanceMeters: 10000, timeSeconds: 2520,
+  source: 'manual', label: '', current: true, ...over,
+});
+
+test('a new plan starts with no benchmarks rather than no field', () => {
+  // An absent field means every reader needs its own `?? []`; an empty array
+  // means none of them do.
+  assert.deepEqual(newPlan({ name: 'x', startISO: '2026-01-05' }).benchmarks, []);
+});
+
+test('a new season inherits the benchmarks, the way it inherits constraints', () => {
+  // The athlete's 10k did not get slower because they picked a new race.
+  const p = newPlan({ name: 'x', startISO: '2026-01-05', benchmarks: [bm()] });
+  assert.deepEqual(p.benchmarks.map((b) => b.id), ['bm-1']);
+  assert.equal(p.benchmarks[0].current, true);
+});
+
+test('loadPlan cleans the benchmarks it was handed', () => {
+  // Unlike events, which the page normalizes, benchmarks are read by the coach
+  // tool and by the card renderer directly. Cleaning them at the one door every
+  // reader comes through is what stops the panel and the coach disagreeing.
+  const p = loadPlan({
+    ...newPlan({ name: 'x', startISO: '2026-01-05' }),
+    benchmarks: [
+      bm({ id: 'b', date: '2026-06-15' }),
+      bm({ id: 'a', date: '2025-03-01' }),
+      { id: 'junk', date: 'never' },
+      null,
+    ],
+  });
+  assert.deepEqual(p.benchmarks.map((b) => b.id), ['a', 'b'], 'junk dropped, date order');
+  assert.deepEqual(p.benchmarks.filter((x) => x.current).map((x) => x.id), ['b'],
+    'two claims to current resolve to the more recent');
+});
+
+test('loadPlan stays idempotent once benchmarks are on the plan', () => {
+  const once = loadPlan({ ...newPlan({ name: 'x', startISO: '2026-01-05' }), benchmarks: [bm()] });
+  assert.deepEqual(loadPlan(once), once);
+});
+
+test('applying a draft carries the benchmark it was built with', () => {
+  const p = newPlan({ name: 'x', startISO: '2026-01-05' });
+  const draft = { ...structuredClone(p), benchmarks: [bm()] };
+  assert.deepEqual(applyDraft(p, draft).benchmarks.map((b) => b.id), ['bm-1']);
+});
+
+test('a changed pace zone shows up in the diff the athlete approves', () => {
+  // paceZone is what a Run card resolves its pace from, so moving a session
+  // from easy to threshold is a change worth seeing before it is applied.
+  const before = newPlan({ name: 'x', startISO: '2026-01-05' });
+  const after = structuredClone(before);
+  const target = after.weeks.w0.find((s) => s.disc === 'Run');
+  assert.ok(target, 'the fixture has a Run session to change');
+  target.paceZone = 'interval';
+
+  const d = diffPlans(before, after);
+  assert.equal(d.weeks.length, 1);
+  assert.equal(d.weeks[0].changed.length, 1);
+  assert.equal(d.weeks[0].changed[0].after.paceZone, 'interval');
+});
+
+test('a v2 plan loads with an empty benchmark list, not a missing one', () => {
+  // v2 predates benchmarks entirely, so there is nothing to carry across — but
+  // the field is present, so no reader downstream needs its own fallback.
+  assert.deepEqual(loadPlan(v2()).benchmarks, []);
+});

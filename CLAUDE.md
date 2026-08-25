@@ -34,6 +34,8 @@ case-insensitive macOS filesystem otherwise hides until Pages serves it.
 | `duration.js` | `"H:MM"` ↔ minutes, the format the app already stores. |
 | `calendar.js` | Week-and-weekday ↔ real date, and the Monday-start month grid the calendar view draws. |
 | `events.js` | The athlete's events. One is the *goal event*, and it is the only source of the plan's race date and distance. |
+| `paces.js` | Running paces. Daniels' VDOT model over one benchmark result, and the benchmark list that holds it — same one-is-flagged shape as `events.js`. |
+| `activities.js` | Reading an activity export. Garmin's activity CSV, plus the arithmetic the page's TCX/GPX readers need. Total, like `portable.js`. |
 
 **Nothing edits a stored plan in place.** A change builds a *draft* (a detached
 copy), which is diffed, validated, shown, and only written by `applyDraft`. That
@@ -47,6 +49,22 @@ event flagged `goal` owns `profile.raceDate` and `profile.raceType`; moving it
 re-fits the season through the same draft → diff → apply flow the setup form
 uses, which is why Plan setup only *shows* the race date.
 
+Running paces work the same way. `benchmarks` is a third such field: a list of
+results the athlete entered or picked out of an export, exactly one flagged
+`current`. Every pace on a Run card is derived from that one at *draw* time,
+never stored on a session — so replacing a benchmark updates the whole season at
+once rather than leaving past weeks asserting last spring's fitness. What
+generation does write is `paceZone`, a band name, resolved from the session's
+own zone label so a card can never show "Z3–Z4" beside a band saying "easy".
+
+**Heart rate is not ingested, anywhere, and that is load-bearing rather than
+incidental.** The whole plan except `chat` syncs to Firestore, so a heart-rate
+field that reached a plan would be one sync from being stored. `activities.js`
+reads past those columns at the parse boundary and has a test asserting the
+value never survives; the Strava mapper in `index.html` does the same. Before
+adding it, read `../yootri-rnd/FINDINGS.md` (25 Aug) and §9 item 4 of the
+private legal note.
+
 Plans are schema v3: absolute week keys (`w0`…`w15`), materialized sessions, and
 a stored `season`. A plan is self-contained, so changing the engine never
 reshapes a season somebody is midway through. `adoptPlan` migrates older records
@@ -59,7 +77,8 @@ prototyping** lives outside this repo, in `../yootri-rnd/` (Python notebooks,
 deliberately not version controlled).
 
 **Before changing training-load computation, session generation, validation
-thresholds or the SVG season chart, read `../yootri-rnd/FINDINGS.md`.** It
+thresholds, the pace model or the SVG season chart, read
+`../yootri-rnd/FINDINGS.md`.** It
 records what was tried, what the numbers said, and what was ruled out — the
 notebooks themselves are noisy and are only worth opening when a finding points
 at one. It also records which constants are unfitted guesses, which matters

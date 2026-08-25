@@ -20,6 +20,7 @@ import { trailingCompliance, weekCompliance } from './actuals.js';
 import { suggest } from './adapt.js';
 import { seasonFit, volumeBeyondRace } from './validate.js';
 import { durToMin } from './duration.js';
+import { paceTableFor, formatPace, ZONES } from './paces.js';
 
 const clone = (x) => structuredClone(x);
 const weekKey = (w) => `w${w}`;
@@ -126,6 +127,12 @@ export const TOOL_DEFS = [
       properties: { week: { type: 'integer', description: 'The week being planned, counting from 1 — the same number the athlete sees on the board.' } },
       required: ['week'],
     },
+  },
+  {
+    name: 'get_training_paces',
+    description:
+      'The athlete\'s running paces: the benchmark result they entered or imported, the VDOT it works out to, and the target pace band for easy, threshold, interval and repetition running, in both min/km and min/mile. Use it whenever you are asked how fast to run something. These are the same numbers the athlete sees in the app, so quoting them keeps you consistent with it — and unlike your own estimate, they are derived from a result this athlete actually ran. An answer saying there is no benchmark yet is a real answer: say so and ask them to add one rather than guessing a pace.',
+    input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
     name: 'set_annual_hours',
@@ -329,6 +336,26 @@ const HANDLERS = {
         ? { ...x.action, input: { ...x.action.input, ...('week' in (x.action.input ?? {}) ? { week: weekLabel(x.action.input.week) } : {}) } }
         : null,
     })));
+  },
+
+  get_training_paces(s) {
+    const table = paceTableFor(current(s).benchmarks);
+    if (!table) {
+      return ok('No training paces yet: the athlete has not entered a running result for them to be derived from. Ask them to add a recent race or time trial — a distance and a time — in the Training paces panel.');
+    }
+
+    const zones = {};
+    for (const z of ZONES) {
+      const band = table.zones[z.key];
+      zones[z.key] = {
+        name: z.label,
+        perKm: `${formatPace(band.fast)} - ${formatPace(band.slow)}`,
+        perMile: `${formatPace(band.fast, 'mi')} - ${formatPace(band.slow, 'mi')}`,
+      };
+    }
+
+    const { id, current: _current, ...benchmark } = table.benchmark;
+    return ok({ benchmark, vdot: Number(table.vdot.toFixed(1)), zones });
   },
 
   set_annual_hours(s, input) {
