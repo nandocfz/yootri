@@ -31,6 +31,18 @@ export function dateOf(startISO, absWeek, dayName) {
 }
 
 /**
+ * Which weekday a date is, named as the rest of the engine names them.
+ *
+ * The inverse of `dateOf`'s weekday half, and UTC for the same reason: a local
+ * Date would answer with yesterday's weekday for anyone west of Greenwich, and
+ * a race week would then be built around the wrong day.
+ */
+export function weekdayOf(iso) {
+  const d = parseISO(iso);
+  return d ? DAYS[(d.getUTCDay() + 6) % 7] : null;
+}
+
+/**
  * The reverse: which week of the plan a date falls in. Deliberately *not*
  * clamped — a date before the plan starts comes back negative, and one past the
  * end comes back too large, so a caller can tell "outside the plan" from

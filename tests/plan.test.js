@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   loadPlan, blockAt, weekCount, sessionsAt, setSessionsAt,
   refit, diffPlans, applyDraft, weekTotals, newPlan, pruneHistory, mintPlanId, moveSession,
+  landingsOf, raceDayFor,
 } from '../assets/coach/plan.js';
 import { normalizeProfile, DAYS } from '../assets/coach/profile.js';
 import { durToMin } from '../assets/coach/duration.js';
@@ -279,9 +280,20 @@ test('an inherited profile does not drag the old race date along with it', () =>
 });
 
 test('a fitted plan arrives with training in it', () => {
-  const p = newPlan({ name: 'A', startISO: '2026-08-17', raceDate: '2026-12-07', mode: 'fitted' });
+  // A Sunday race, so the last week is a race week with six days before it.
+  const p = newPlan({ name: 'A', startISO: '2026-08-17', raceDate: '2026-12-06', mode: 'fitted' });
   const totals = weekTotals(p);
   assert.ok(totals.every((m) => m > 0), 'every week should hold training');
+});
+
+test('a race early in the week leaves the rest of that week clear', () => {
+  // 2026-12-07 is a Monday. Nothing is scheduled on race day or after it, so
+  // the plan's last week is the race and nothing else — the openers belong to
+  // the week before, which is where they already are.
+  const p = newPlan({ name: 'A', startISO: '2026-08-17', raceDate: '2026-12-07', mode: 'fitted' });
+  const totals = weekTotals(p);
+  assert.equal(totals.at(-1), 0, 'a Monday race has no week left after it');
+  assert.ok(totals.slice(0, -1).every((m) => m > 0), 'every other week still holds training');
 });
 
 test('an empty plan arrives as a blank calendar of the right length', () => {
@@ -427,7 +439,7 @@ test('a new plan starts with its race already on the calendar', () => {
   assert.equal(p.events.length, 1);
   assert.equal(p.events[0].date, '2027-07-25');
   assert.equal(p.events[0].raceType, 'ironman');
-  assert.equal(p.events[0].goal, true);
+  assert.equal(p.events[0].priority, 'primary');
 });
 
 test('a new plan with no race date starts with an empty calendar', () => {
@@ -507,4 +519,102 @@ test('a v2 plan loads with an empty benchmark list, not a missing one', () => {
   // v2 predates benchmarks entirely, so there is nothing to carry across — but
   // the field is present, so no reader downstream needs its own fallback.
   assert.deepEqual(loadPlan(v2()).benchmarks, []);
+});
+
+/* ---- More than one race in a season ---------------------------------------
+
+   The primary race fixes the runway and keeps the model's own peak and race
+   week. Every other race the athlete marked `secondary` gets a landing: one
+   taper week and one race week, out of the block it falls in. */
+
+// A 20-week plan from a Monday start, aimed at a Sunday IRONMAN.
+const twoRacePlan = ({ tuneUp = '2027-01-24', priority = 'secondary' } = {}) => {
+  const base = newPlan({
+    name: 'Season', startISO: '2026-11-02', raceDate: '2027-03-21',
+    raceType: 'ironman', now: 1,
+  });
+  return {
+    ...base,
+    events: [
+      ...base.events,
+      { id: 'ev-tune', name: 'Lisbon', date: tuneUp, kind: 'race', raceType: '70.3', priority },
+    ],
+  };
+};
+
+test('landingsOf reports the weeks the tune-up races fall in', () => {
+  const p = twoRacePlan();
+  assert.deepEqual(landingsOf(p), [11], '2027-01-24 is week 11 of a plan starting 2026-11-02');
+  assert.deepEqual(landingsOf({ start: '2026-11-02', events: [] }), []);
+  assert.deepEqual(landingsOf({}), []);
+});
+
+test('the race the season is built for is not a landing', () => {
+  // It is the week the whole runway already ends on. Landing it again would
+  // splice a taper over the peak that was built to arrive at it.
+  const p = newPlan({ name: 'A', startISO: '2026-11-02', raceDate: '2027-03-21', raceType: 'ironman', now: 1 });
+  assert.deepEqual(landingsOf(p), []);
+});
+
+test('a marker race is not a landing', () => {
+  const p = twoRacePlan({ priority: null });
+  assert.deepEqual(landingsOf(p), []);
+});
+
+test('refit lands the tune-up races the plan carries', () => {
+  const p = twoRacePlan();
+  const drafted = refit(p, {});
+  assert.equal(drafted.season[11].block, 'Race', 'the tune-up race week');
+  assert.equal(drafted.season[10].block, 'Taper');
+  assert.equal(drafted.season.at(-1).block, 'Race', 'and the season still ends on the primary');
+  assert.equal(weekCount(drafted), weekCount(p), 'the season did not get longer for it');
+});
+
+test('adding a tune-up race is a change the athlete gets to review', () => {
+  const before = newPlan({ name: 'A', startISO: '2026-11-02', raceDate: '2027-03-21', raceType: 'ironman', now: 1 });
+  const after = refit(twoRacePlan(), {});
+  const d = diffPlans(before, after);
+  assert.ok(d.weeks.length > 0, 'the weeks it landed on changed');
+  assert.ok(d.weeks.some((w) => w.absWeek === 11));
+  assert.equal(d.blocked, false, 'a tune-up race is not impossible, just a decision');
+});
+
+test('a race the season cannot build a taper for is reported at the diff', () => {
+  // Two weeks before the primary race is inside its own peak and race week.
+  const before = newPlan({ name: 'A', startISO: '2026-11-02', raceDate: '2027-03-21', raceType: 'ironman', now: 1 });
+  const after = refit(twoRacePlan({ tuneUp: '2027-03-07' }), {});
+  const hit = diffPlans(before, after).issues.find((i) => i.code === 'race-in-primary-taper');
+  assert.ok(hit, 'the athlete is told while they are deciding, not weeks later');
+});
+
+test('raceDayFor finds the day a race is actually on', () => {
+  const p = twoRacePlan();
+  assert.equal(raceDayFor(p, 11), 'Sun', '2027-01-24 is a Sunday');
+  assert.equal(raceDayFor(p, weekCount(p) - 1), 'Sun', 'and so is the primary race');
+  assert.equal(raceDayFor(p, 4), null);
+});
+
+test('a race the model refused a taper for still clears its own day', () => {
+  // They are racing that day either way. Whether a taper was built for it is a
+  // separate question from whether the week should schedule training on it.
+  const p = twoRacePlan({ tuneUp: '2027-03-07' });
+  assert.equal(raceDayFor(p, 17), 'Sun');
+});
+
+test('a marker race does not clear a day', () => {
+  const p = twoRacePlan({ priority: null });
+  assert.equal(raceDayFor(p, 11), null);
+});
+
+test('a tune-up race week is built around the race day', () => {
+  // 2027-01-23 is a Saturday, so the Sunday after it belongs to the race.
+  const drafted = refit(twoRacePlan({ tuneUp: '2027-01-23' }), {});
+  const week = drafted.weeks.w11;
+  for (const day of ['Sat', 'Sun']) {
+    assert.equal(
+      week.filter((x) => x.day === day).reduce((a, x) => a + durToMin(x.dur), 0), 0,
+      `${day} should be clear for the race`,
+    );
+  }
+  assert.ok(week.some((x) => durToMin(x.dur) > 0), 'the days before it still hold the week');
 });

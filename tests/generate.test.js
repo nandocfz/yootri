@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { generateWeek, weekMinutes, raceDemandMinutes } from '../assets/coach/generate.js';
+import { generateWeek, weekMinutes, raceDemandMinutes, blockFamily } from '../assets/coach/generate.js';
 import { ZONE_FOR_LABEL } from '../assets/coach/paces.js';
 import { normalizeProfile, DAYS } from '../assets/coach/profile.js';
 import { durToMin } from '../assets/coach/duration.js';
@@ -473,4 +473,61 @@ test('a generated session gained a field and lost none', () => {
   const rest = week.sessions.find((s) => s.disc === 'Rest');
   assert.deepEqual(Object.keys(run).sort(), ['day', 'disc', 'dur', 'focus', 'id', 'paceZone', 'zone']);
   assert.deepEqual(Object.keys(rest).sort(), ['day', 'disc', 'dur', 'focus', 'id', 'zone']);
+});
+
+/* Race weeks are built around the day the race is actually on.
+
+   The season model lands the last week *containing* the race, not the last week
+   *ending* on it — so a Saturday race has a Sunday after it, and until this the
+   generator cheerfully scheduled training on it. */
+
+test('a taper week is shaped like the peak it is the down week of', () => {
+  const p = normalizeProfile({});
+  assert.equal(blockFamily('Taper'), 'Peak');
+  const taper = generateWeek({ hours: 8, block: 'Taper', profile: p, idPrefix: 'w0' }).sessions;
+  const peak = generateWeek({ hours: 8, block: 'Peak', profile: p, idPrefix: 'w0' }).sessions;
+  assert.deepEqual(taper, peak, 'the same hours in the same block family are the same week');
+});
+
+test('nothing is scheduled on race day or after it', () => {
+  const p = normalizeProfile({});
+  const { sessions } = generateWeek({ hours: 6, block: 'Race', profile: p, idPrefix: 'w0', raceDay: 'Sat' });
+  for (const s of sessions.filter((x) => ['Sat', 'Sun'].includes(x.day))) {
+    assert.equal(durToMin(s.dur), 0, `${s.day} should be clear for the race`);
+  }
+  assert.ok(sessions.some((s) => durToMin(s.dur) > 0), 'the days before it still hold the week');
+});
+
+test('a race week still spends what it can of its budget', () => {
+  // The point of closing the days is that their minutes move, not that the week
+  // shrinks to whatever happened to be left.
+  const p = normalizeProfile({});
+  const { sessions } = generateWeek({ hours: 6, block: 'Race', profile: p, idPrefix: 'w0', raceDay: 'Sun' });
+  const open = generateWeek({ hours: 6, block: 'Race', profile: p, idPrefix: 'w0' }).sessions;
+  assert.ok(weekMinutes(sessions) > 0);
+  assert.equal(sessions.find((s) => s.day === 'Sun' && durToMin(s.dur) > 0), undefined);
+  assert.ok(weekMinutes(sessions) >= weekMinutes(open) - 60,
+    'closing one day moves its minutes, it does not throw the week away');
+});
+
+test('a race on the first day of the week leaves the week clear', () => {
+  const p = normalizeProfile({});
+  const { sessions } = generateWeek({ hours: 6, block: 'Race', profile: p, idPrefix: 'w0', raceDay: 'Mon' });
+  assert.equal(weekMinutes(sessions), 0);
+  assert.equal(sessions.length, 7, 'seven rest days, so a session can still be dropped on one');
+});
+
+test('no race day given is the week the generator always built', () => {
+  const p = normalizeProfile({});
+  const before = generateWeek({ hours: 6, block: 'Race', profile: p, idPrefix: 'w0' });
+  assert.deepEqual(generateWeek({ hours: 6, block: 'Race', profile: p, idPrefix: 'w0', raceDay: null }), before);
+  assert.deepEqual(generateWeek({ hours: 6, block: 'Race', profile: p, idPrefix: 'w0', raceDay: 'Blursday' }), before);
+});
+
+test('the race day rule is not limited to race blocks', () => {
+  // A tune-up race lands its taper week in whatever block it fell in, and the
+  // week before a Saturday race has a Sunday after it too.
+  const p = normalizeProfile({});
+  const { sessions } = generateWeek({ hours: 10, block: 'Base 2', profile: p, idPrefix: 'w0', raceDay: 'Sat' });
+  assert.equal(sessions.filter((s) => s.day === 'Sun' && durToMin(s.dur) > 0).length, 0);
 });

@@ -307,7 +307,18 @@ test('a sprint plan with a professional training load is flagged', () => {
   assert.ok(hit, `expected volume-beyond-race, got ${codes(issues)}`);
   assert.equal(hit.level, 'warn');
   assert.equal(hit.weekIndex, null);
-  assert.match(hit.message, /sprint/);
+  assert.match(hit.message, /Sprint/, 'named the way the picker names it, now that it offers one');
+});
+
+test('the warning names the distance the way the athlete sees it', () => {
+  // The message is copy, so it says what the picker says. A stored '70.3'
+  // reaching the athlete as '70.3' would be the one place in the app still
+  // calling the distance by its key.
+  const prof = raceProf(4000, BIG_WEEK, '70.3');
+  const hit = validateSeason(seasonWith(4000, prof), { profile: prof })
+    .find((i) => i.code === 'volume-beyond-race');
+  assert.ok(hit, 'expected volume-beyond-race');
+  assert.match(hit.message, /IM 70\.3/);
 });
 
 test('plausible builds at every distance are left alone', () => {
@@ -337,4 +348,119 @@ test('volume the athlete has no time to do is not held against the race', () => 
   const out = codes(validateSeason(seasonWith(2000, prof), { profile: prof }));
   assert.ok(out.includes('season-flattened'), `expected the flattening rule, got ${out}`);
   assert.ok(!out.includes('volume-beyond-race'), `got ${out}`);
+});
+
+/* ---- Seasons with more than one race in them ------------------------------
+
+   A tune-up race splices a taper week and a race week into the block it lands
+   in. Two of the rules above were written when a season could only have one
+   race, and both fire on the engine's own output once it can have several. */
+
+const landedSeason = (opts = {}) => {
+  const prof = normalizeProfile({
+    availability: { Mon: 0, Tue: 90, Wed: 105, Thu: 90, Fri: 75, Sat: 300, Sun: 210 },
+  });
+  const season = fitToRace({ annualHours: 500, weeks: 27, landings: opts.landings ?? [12] });
+  return {
+    profile: prof,
+    weeks: season.map((w) => ({
+      ...w,
+      sessions: generateWeek({
+        hours: w.hours, block: w.block, profile: prof, idPrefix: `w${w.absWeek}`,
+      }).sessions,
+    })),
+  };
+};
+
+test('a season with a tune-up race in it does not trip the engine own warnings', () => {
+  // The same regression test as for the default season, and the same reason.
+  // Both rules below were caught by exactly this.
+  const { weeks, profile: prof } = landedSeason();
+  const issues = validateSeason(weeks, { profile: prof });
+  assert.deepEqual(issues, [], `a freshly generated season should be clean, got ${JSON.stringify(issues, null, 1)}`);
+});
+
+test('two tune-up races in one season are still clean', () => {
+  const { weeks, profile: prof } = landedSeason({ landings: [8, 17] });
+  assert.deepEqual(validateSeason(weeks, { profile: prof }), []);
+});
+
+test('the taper rule applies within a taper, not to everything after one', () => {
+  // Volume rising again after a tune-up race is the plan resuming, not a taper
+  // going backwards. Measured to the end of the season it fired on every week.
+  const weeks = seasonOf([600, 400, 250, 620, 640], {
+    blocks: ['Base 2', 'Taper', 'Race', 'Base 3', 'Base 3'],
+  });
+  assert.ok(!codes(validateSeason(weeks, { profile })).includes('taper-not-decreasing'));
+});
+
+test('a tune-up taper that goes back up is still flagged', () => {
+  const weeks = seasonOf([600, 250, 400, 620], {
+    blocks: ['Base 2', 'Taper', 'Race', 'Base 3'],
+  });
+  const hit = validateSeason(weeks, { profile }).find((i) => i.code === 'taper-not-decreasing');
+  assert.ok(hit, `expected taper-not-decreasing, got ${codes(validateSeason(weeks, { profile }))}`);
+  assert.equal(hit.weekIndex, 2);
+});
+
+test('resuming training after a race week is not a step too steep', () => {
+  // The block-step ceiling compares against the previous block hardest week. A
+  // race week is a deliberate down week, so every return from one cleared it.
+  const weeks = seasonOf([600, 250, 150, 620], {
+    blocks: ['Base 2', 'Taper', 'Race', 'Base 3'],
+    loads: [1.4, 0.88, 0.7, 1.275],
+  });
+  assert.ok(!codes(validateSeason(weeks, { profile })).includes('block-step-too-steep'));
+});
+
+test('the block-step ceiling is still measured, just from the last block that loaded', () => {
+  // Resetting at a race week must not become a blind spot either.
+  const weeks = seasonOf([400, 250, 150, 900], {
+    blocks: ['Base 2', 'Taper', 'Race', 'Base 3'],
+    loads: [1.4, 0.88, 0.7, 1.5],
+  });
+  const hit = validateSeason(weeks, { profile }).find((i) => i.code === 'block-step-too-steep');
+  assert.ok(hit, 'doubling volume coming out of a race week should not pass silently');
+  assert.equal(hit.weekIndex, 3);
+  assert.match(hit.message, /6\.7h/, 'measured against Base 2, not against the race week');
+});
+
+/* Races the season model could not build a taper for. The athlete is told at
+   the diff, where they are deciding — not left to notice a missing taper weeks
+   later. `diffPlans` passes these through from `planLandings`. */
+
+test('a race inside the primary taper is reported against its week', () => {
+  const weeks = seasonOf([600, 400, 250], { blocks: ['Build 2', 'Peak', 'Race'] });
+  const hit = validateSeason(weeks, {
+    profile,
+    refusedLandings: [{ absWeek: 1, reason: 'in-primary-taper' }],
+  }).find((i) => i.code === 'race-in-primary-taper');
+  assert.ok(hit);
+  assert.equal(hit.level, 'warn', 'the race is the athlete own call; it is not impossible');
+  assert.equal(hit.weekIndex, 1);
+});
+
+test('two races too close together is reported against the later one', () => {
+  const hit = validateSeason(seasonOf([600, 610, 620]), {
+    profile,
+    refusedLandings: [{ absWeek: 2, reason: 'too-close' }],
+  }).find((i) => i.code === 'races-too-close');
+  assert.ok(hit);
+  assert.equal(hit.weekIndex, 2);
+});
+
+test('a race outside the season is not warned about', () => {
+  // The calendar draws those deliberately — a race further out than the plan
+  // reaches is exactly the one you have not built for yet. Warning on every
+  // parked future race would be noise.
+  const issues = validateSeason(seasonOf([600, 610]), {
+    profile,
+    refusedLandings: [{ absWeek: 99, reason: 'outside-season' }],
+  });
+  assert.deepEqual(issues.filter((i) => i.code.startsWith('race')), []);
+});
+
+test('no refused landings is no new warnings', () => {
+  const weeks = seasonOf([600, 610]);
+  assert.deepEqual(validateSeason(weeks, { profile }), validateSeason(weeks, { profile, refusedLandings: [] }));
 });

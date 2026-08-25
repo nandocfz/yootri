@@ -11,13 +11,14 @@
 
 import { migratePlan } from './migrate.js';
 import { normalizeProfile } from './profile.js';
-import { fitToRace } from './season.js';
+import { fitToRace, planLandings } from './season.js';
 import { generateWeek } from './generate.js';
 import { validateSeason } from './validate.js';
 import { durToMin, REST_DUR } from './duration.js';
 import { DAYS } from './profile.js';
 import { weeksUntil } from './dates.js';
-import { seedEventsFromProfile } from './events.js';
+import { weekIndexOf, weekdayOf } from './calendar.js';
+import { normalizeEvents, secondaryRaces, seedEventsFromProfile } from './events.js';
 import { normalizeBenchmarks } from './paces.js';
 
 const clone = (x) => structuredClone(x);
@@ -139,6 +140,42 @@ export function weekTotals(plan) {
   );
 }
 
+/* ---- Where the races fall -------------------------------------------------
+   The two functions the calendar and the season model meet in. Everything else
+   in this file counts weeks; events are dated. Both take anything carrying
+   `start` and `events`, so a plan being built works as well as a stored one.
+
+   Both normalize on the way in. `loadPlan` deliberately does not — events are
+   the page's to clean — so an imported file or a coach-written list could
+   otherwise reach the season model with a priority on a non-race. */
+
+/** The absolute weeks the plan's secondary races fall in — what `fitToRace`
+    lands a taper and race week on. The primary race is not among them: it is
+    the week the whole runway already ends on. */
+export function landingsOf(plan) {
+  return secondaryRaces(normalizeEvents(plan?.events))
+    .map((ev) => weekIndexOf(plan?.start, ev.date))
+    .filter((w) => Number.isInteger(w));
+}
+
+/**
+ * The weekday a race falls on in a given week, or null when none does.
+ *
+ * Every race the athlete marked counts here, including one the season model
+ * turned down for a taper: they are racing that day either way, so the week
+ * should not schedule training on it. A marker with no priority does not — it
+ * changes nothing by definition.
+ *
+ * Two races in one week give the earlier day, which is the conservative answer.
+ */
+export function raceDayFor(plan, absWeek) {
+  return normalizeEvents(plan?.events)
+    .filter((ev) => ev.kind === 'race' && ev.priority && weekIndexOf(plan?.start, ev.date) === absWeek)
+    .map((ev) => weekdayOf(ev.date))
+    .filter(Boolean)
+    .sort((a, b) => DAYS.indexOf(a) - DAYS.indexOf(b))[0] ?? null;
+}
+
 /**
  * Re-fit the plan and hand back a draft. The stored plan is untouched.
  *
@@ -158,6 +195,9 @@ export function refit(plan, { profile, from = 0, to = Infinity, weeks } = {}) {
   draft.season = fitToRace({
     annualHours: draft.profile.annualHours,
     weeks: Number.isFinite(weeks) && weeks > 0 ? Math.round(weeks) : weekCount(plan),
+    // Tune-up races come out of the block they fall in. Read off the draft, so
+    // a caller that changed the events and the profile in one go gets both.
+    landings: landingsOf(draft),
   });
 
   // Reapply any pinned per-week budgets on top. Without this, "make next week
@@ -179,6 +219,7 @@ export function refit(plan, { profile, from = 0, to = Infinity, weeks } = {}) {
       block: w.block,
       profile: draft.profile,
       idPrefix: weekKey(w.absWeek),
+      raceDay: raceDayFor(draft, w.absWeek),
     }).sessions;
   }
   return draft;
@@ -229,7 +270,16 @@ export function diffPlans(before, after) {
 
   const issues = validateSeason(
     (after.season ?? []).map((w) => ({ ...w, sessions: after.weeks?.[weekKey(w.absWeek)] ?? [] })),
-    { profile: after.profile },
+    {
+      profile: after.profile,
+      // A race the season could not build a taper for is a thing the athlete
+      // needs told at the diff, where they are deciding — not left to be
+      // noticed as a missing taper weeks later.
+      refusedLandings: planLandings({
+        weeks: weekCount(after),
+        landings: landingsOf(after),
+      }).refused,
+    },
   );
 
   return {
@@ -325,15 +375,28 @@ export function newPlan({
     ...(raceType ? { raceType } : {}),
   });
 
+  // The race the season is built for is also the first thing on the calendar,
+  // so there is one place it is recorded rather than two — and it is needed
+  // *before* the weeks are built, because the last one is shaped around the day
+  // the race is actually on.
+  const events = seedEventsFromProfile(base, { id: `ev-${now.toString(36)}` });
+  const dated = { start: startISO, events };
+
   const weeks = weeksUntil(startISO, raceDate) ?? FALLBACK_WEEKS;
-  const season = fitToRace({ annualHours: base.annualHours, weeks });
+  const season = fitToRace({ annualHours: base.annualHours, weeks, landings: landingsOf(dated) });
 
   const built = {};
   for (const w of season) {
     const key = weekKey(w.absWeek);
     built[key] = mode === 'empty'
       ? emptyWeek(key)
-      : generateWeek({ hours: w.hours, block: w.block, profile: base, idPrefix: key }).sessions;
+      : generateWeek({
+        hours: w.hours,
+        block: w.block,
+        profile: base,
+        idPrefix: key,
+        raceDay: raceDayFor(dated, w.absWeek),
+      }).sessions;
   }
 
   return {
@@ -344,9 +407,7 @@ export function newPlan({
     profile: base,
     season,
     weeks: built,
-    // The race the season was built for is also the first thing on the
-    // calendar, so there is one place it is recorded rather than two.
-    events: seedEventsFromProfile(base, { id: `ev-${now.toString(36)}` }),
+    events,
     // Carried across for the same reason the constraints are: the athlete's
     // 10 km did not get slower because they picked a new race.
     benchmarks: normalizeBenchmarks(benchmarks),

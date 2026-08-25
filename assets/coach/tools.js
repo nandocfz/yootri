@@ -13,7 +13,7 @@
    Reads operate on the draft when one exists, so the model can see the
    consequences of its own pending changes before proposing them. */
 
-import { loadPlan, blockAt, weekCount, sessionsAt, refit, diffPlans } from './plan.js';
+import { loadPlan, blockAt, weekCount, sessionsAt, refit, diffPlans, landingsOf, raceDayFor } from './plan.js';
 import { normalizeProfile, resolveWeekShape, SPREAD_MODES, DAYS, DISCIPLINES } from './profile.js';
 import { generateWeek } from './generate.js';
 import { trailingCompliance, weekCompliance } from './actuals.js';
@@ -21,6 +21,14 @@ import { suggest } from './adapt.js';
 import { seasonFit, volumeBeyondRace } from './validate.js';
 import { durToMin } from './duration.js';
 import { paceTableFor, formatPace, ZONES } from './paces.js';
+import { planLandings, LONG_RUNWAY_WEEKS } from './season.js';
+import { weekIndexOf, weekdayOf } from './calendar.js';
+import { weeksUntil, parseISO, toISO } from './dates.js';
+import {
+  EVENT_KINDS, EVENT_PRIORITIES, RACE_TYPES, KNOWN_RACE_TYPES, SECONDARY_RACE_TYPES,
+  STORABLE_RACE_TYPES, raceTypeLabel, normalizeEvents, upsertEvent, removeEvent,
+  goalEvent, raceFieldsOf,
+} from './events.js';
 
 const clone = (x) => structuredClone(x);
 const weekKey = (w) => `w${w}`;
@@ -61,6 +69,8 @@ function rebuild(draft, from, to) {
       block: w.block,
       profile: draft.profile,
       idPrefix: weekKey(w.absWeek),
+      // Or regenerating a range would schedule training on a race day.
+      raceDay: raceDayFor(draft, w.absWeek),
     }).sessions;
   }
   return draft;
@@ -81,6 +91,149 @@ const summariseWeek = (plan, w) => {
       .map((x) => ({ id: x.id, day: x.day, disc: x.disc, minutes: durToMin(x.dur), focus: x.focus })),
   };
 };
+
+/* ---- Events ---------------------------------------------------------------
+
+   The one place the model can change what the season is *for*, rather than how
+   it is trained. The safety property is the same as everywhere else here — the
+   write lands in `session.draft` and the athlete approves a diff — but the blast
+   radius is larger, because making a race primary re-lengths the whole runway.
+   So the guards below are deliberately talkative: a refusal the model can read
+   and correct is worth more than one it can only retry. */
+
+/** An id for an event the model created. Unlike a session id it is never
+    regenerated, so it only has to be unique within the plan. */
+const mintEventId = (now = Date.now()) =>
+  `ev-${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/** The priority a tool was asked for, as the engine spells it. 'none' is the
+    model's word for "a marker on the calendar", which the engine stores as no
+    priority at all. */
+const PRIORITY_INPUT = [...EVENT_PRIORITIES, 'none'];
+const asPriority = (v) => (v === 'none' ? null : v);
+
+const eventsOf = (plan) => normalizeEvents(plan.events);
+const findEvent = (plan, id) => eventsOf(plan).find((ev) => ev.id === String(id ?? '')) ?? null;
+
+/** What one event looks like to the model: what it is, and where in the season
+    it falls. The week is 1-based, like every other week these tools speak. */
+const describeEvent = (plan, ev) => {
+  const at = weekIndexOf(plan.start, ev.date);
+  return {
+    id: ev.id,
+    name: ev.name,
+    date: ev.date,
+    weekday: weekdayOf(ev.date),
+    kind: ev.kind,
+    raceType: ev.raceType,
+    raceTypeName: ev.raceType ? raceTypeLabel(ev.raceType) : null,
+    priority: ev.priority ?? 'none',
+    // Null rather than clamped: a race the plan does not reach is a real thing
+    // to have on the calendar, and saying "week 1" for it would be a lie.
+    week: Number.isInteger(at) && at >= 0 && at < weekCount(plan) ? weekLabel(at) : null,
+  };
+};
+
+/** Whether the season model built a taper for a given secondary race, in the
+    words the athlete would be shown. Null when there is nothing to say. */
+function landingNote(plan, ev) {
+  if (!ev || ev.priority !== 'secondary') return null;
+  const at = weekIndexOf(plan.start, ev.date);
+  const { applied, refused } = planLandings({ weeks: weekCount(plan), landings: landingsOf(plan) });
+
+  if (applied.some((a) => a.absWeek === at)) {
+    return `Week ${weekLabel(at)} is now its race week` +
+      (at > 0 ? `, with week ${weekLabel(at - 1)} as a taper week before it.` : '.');
+  }
+  return {
+    'in-primary-taper':
+      'It falls inside the taper for the race the season is built around, so no separate taper week was built for it.',
+    'too-close':
+      'It is too close to another race for both to have a taper week, so only the earlier one has one.',
+    'outside-season':
+      'It falls outside this season, so it is a marker on the calendar and nothing was built for it.',
+  }[refused.find((r) => r.absWeek === at)?.reason] ?? null;
+}
+
+/**
+ * Write an edited event list into the draft and refit around it.
+ *
+ * The primary race owns the race date and distance, so this is also the only
+ * place they change: they are read back off the list rather than passed in,
+ * which is what stops the profile and the calendar disagreeing about the race.
+ */
+function writeEvents(s, base, next, lead) {
+  const events = normalizeEvents(next);
+  const race = raceFieldsOf(events);
+
+  const profile = {
+    ...base.profile,
+    raceDate: race.raceDate,
+    // Null means the primary race did not say, so keep the distance the profile
+    // already holds rather than overwriting it with nothing.
+    ...(race.raceType ? { raceType: race.raceType } : {}),
+  };
+
+  // The runway only moves when there is a race to aim it at. With none, the
+  // weeks already built stay as they are — they have already been trained.
+  const weeks = race.raceDate ? weeksUntil(base.start, race.raceDate) : null;
+  const draft = refit({ ...base, events }, {
+    profile,
+    ...(Number.isFinite(weeks) && weeks > 0 ? { weeks } : {}),
+  });
+  s.draft = draft;
+
+  const said = [lead];
+  if (weekCount(draft) !== weekCount(base)) {
+    said.push(`The season is now ${weekCount(draft)} weeks, ending ${race.raceDate}.`);
+  }
+  if (weekCount(draft) > LONG_RUNWAY_WEEKS) {
+    said.push(`That is a long runway: past ${LONG_RUNWAY_WEEKS} weeks the early weeks come out as ` +
+      'a repeat of the first block rather than a shape built for them, so a plan starting closer ' +
+      'to the date would be a better season. Say so.');
+  }
+  if (!race.raceDate) {
+    said.push('There is no race the season is built around now, so it keeps its current length.');
+  }
+  return { draft, said };
+}
+
+/** Guards shared by every tool that writes an event. Each returns a sentence
+    the model can act on, or null when there is nothing wrong. */
+function eventProblem(base, { date, kind, raceType, priority }) {
+  if (date !== undefined) {
+    if (!toISO(parseISO(date))) {
+      return `"${date}" is not a date. Use YYYY-MM-DD.`;
+    }
+    if (toISO(parseISO(date)) < base.start) {
+      return `${date} is before this plan starts (${base.start}), so the calendar has nowhere ` +
+        'to show it. The athlete would need to move the start date or begin a new plan for that race.';
+    }
+  }
+  if (kind !== undefined && !EVENT_KINDS.includes(kind)) {
+    return `"${kind}" is not an event kind. Use one of: ${EVENT_KINDS.join(', ')}.`;
+  }
+  if (raceType !== undefined && raceType !== null) {
+    if (kind === 'other') return 'Only a race carries a distance.';
+    if (!STORABLE_RACE_TYPES.includes(raceType)) {
+      return `"${raceType}" is not a distance yootri knows. Use one of: ${STORABLE_RACE_TYPES.join(', ')}.`;
+    }
+  }
+  if (priority !== undefined && !PRIORITY_INPUT.includes(priority)) {
+    return `"${priority}" is not a priority. Use one of: ${PRIORITY_INPUT.join(', ')}.`;
+  }
+  if (priority === 'primary') {
+    if (kind === 'other') {
+      return 'Only a race can be the race the season is built around.';
+    }
+    if (raceType && !KNOWN_RACE_TYPES.includes(raceType)) {
+      return `A ${raceTypeLabel(raceType)} cannot be the race a season is built around: the volume ` +
+        `model is sized by race distance and only knows ${RACE_TYPES.map(raceTypeLabel).join(' and ')}. ` +
+        'Make it secondary instead — the season will still build a taper week and a race week for it.';
+    }
+  }
+  return null;
+}
 
 export const TOOL_DEFS = [
   {
@@ -252,6 +405,68 @@ export const TOOL_DEFS = [
       required: ['from', 'to'],
     },
   },
+  {
+    name: 'get_events',
+    description:
+      "Everything on the athlete's calendar: races and anything else worth seeing next to the training, with the week of the season each falls in. Also says which races the season model built a taper week and a race week for, and why it could not for the others. Call this before changing any event — every other event tool needs an id from here.",
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'add_event',
+    description:
+      "Put something new on the calendar. A race marked 'secondary' is a tune-up inside the build: the season is rebuilt with a taper week and a race week landing on it, taken out of the block it falls in — it does not make the season longer. A race marked 'primary' is the race the whole season is built around, and changing that re-lengths the runway to its date. Use 'none' for a race being noted rather than trained for, and for anything that is not a race.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'What to call it, e.g. "Ironman Cascais".' },
+        date: { type: 'string', description: 'The day it is on, as YYYY-MM-DD.' },
+        kind: { type: 'string', enum: EVENT_KINDS, description: "'race', or 'other' for anything else." },
+        race_type: {
+          type: 'string',
+          enum: STORABLE_RACE_TYPES,
+          description: `The distance. Only ${RACE_TYPES.join(' and ')} can be the race a season is built around; the rest can only be secondary.`,
+        },
+        priority: { type: 'string', enum: PRIORITY_INPUT, description: 'What this race is to the season.' },
+      },
+      required: ['date'],
+    },
+  },
+  {
+    name: 'move_event',
+    description:
+      'Change the date of something already on the calendar, and refit the season around where it now falls. Moving the primary race changes how long the season is.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string', description: 'From get_events.' },
+        date: { type: 'string', description: 'The new day, as YYYY-MM-DD.' },
+      },
+      required: ['event_id', 'date'],
+    },
+  },
+  {
+    name: 'set_event_priority',
+    description:
+      "Change what a race is to the season: 'primary' rebuilds the whole season around it, 'secondary' gives it a taper week and a race week where it falls, 'none' leaves it as a marker and takes back any taper built for it. Making one race primary stands the previous primary down to secondary rather than removing it — it is still a race the athlete is doing.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: { type: 'string', description: 'From get_events.' },
+        priority: { type: 'string', enum: PRIORITY_INPUT },
+      },
+      required: ['event_id', 'priority'],
+    },
+  },
+  {
+    name: 'remove_event',
+    description:
+      'Take something off the calendar and refit the season without it. Removing the race the season is built around leaves the weeks already built alone — they have been trained — but the season is no longer aimed at anything, so say so.',
+    input_schema: {
+      type: 'object',
+      properties: { event_id: { type: 'string', description: 'From get_events.' } },
+      required: ['event_id'],
+    },
+  },
 ];
 
 const HANDLERS = {
@@ -277,6 +492,10 @@ const HANDLERS = {
       raceDate: p.profile.raceDate,
       startDate: p.start,
       blocks: runs,
+      // A season can hold more than one race, and the blocks above already show
+      // where the tune-ups landed. Listing them here saves a second call to
+      // work out what a mid-season Taper and Race block are doing there.
+      events: eventsOf(p).map((ev) => describeEvent(p, ev)),
       weeklyPlannedMinutes: p.season.map((w) => weekCompliance(p, w.absWeek).plannedMinutes),
       fit: fit ? {
         weeklyCapacityMinutes: fit.capacityMinutes,
@@ -498,6 +717,95 @@ const HANDLERS = {
     if (to < from) return fail('"to" must not be before "from".');
     s.draft = rebuild(clone(base), from, to);
     return ok(`Weeks ${weekLabel(from)}–${weekLabel(to)} rebuilt from the current profile.`);
+  },
+
+  get_events(s) {
+    const p = current(s);
+    const events = eventsOf(p);
+    const { applied, refused } = planLandings({ weeks: weekCount(p), landings: landingsOf(p) });
+    return ok({
+      startDate: p.start,
+      totalWeeks: weekCount(p),
+      events: events.map((ev) => describeEvent(p, ev)),
+      tunedUpWeeks: applied.map((a) => ({
+        raceWeek: weekLabel(a.absWeek),
+        taperWeek: a.taperWeek === null ? null : weekLabel(a.taperWeek),
+      })),
+      // Present only when something was turned down, so its presence is the
+      // finding — the same shape get_plan_summary uses for the fit warnings.
+      noTaperBuilt: refused.map((r) => ({ week: weekLabel(r.absWeek), reason: r.reason })),
+    });
+  },
+
+  add_event(s, input) {
+    const base = draftOf(s);
+    const kind = input.kind ?? (input.race_type || input.priority ? 'race' : 'other');
+    const priority = input.priority ?? 'none';
+    const raceType = input.race_type ?? null;
+
+    const wrong = eventProblem(base, { date: input.date, kind, raceType, priority });
+    if (wrong) return fail(wrong);
+
+    const ev = {
+      id: mintEventId(),
+      name: input.name,
+      date: input.date,
+      kind,
+      raceType,
+      priority: asPriority(priority),
+    };
+    const { draft, said } = writeEvents(s, base, upsertEvent(eventsOf(base), ev),
+      `Added ${ev.name || 'an event'} on ${ev.date}.`);
+
+    const note = landingNote(draft, findEvent(draft, ev.id));
+    return ok([...said, note].filter(Boolean).join(' '));
+  },
+
+  move_event(s, input) {
+    const base = draftOf(s);
+    const ev = findEvent(base, input.event_id);
+    if (!ev) return fail(`No event "${input.event_id}" on this calendar. Call get_events first.`);
+
+    const wrong = eventProblem(base, { date: input.date });
+    if (wrong) return fail(wrong);
+
+    const { draft, said } = writeEvents(s, base, upsertEvent(eventsOf(base), { ...ev, date: input.date }),
+      `Moved ${ev.name || 'the event'} from ${ev.date} to ${input.date}.`);
+
+    const note = landingNote(draft, findEvent(draft, ev.id));
+    return ok([...said, note].filter(Boolean).join(' '));
+  },
+
+  set_event_priority(s, input) {
+    const base = draftOf(s);
+    const ev = findEvent(base, input.event_id);
+    if (!ev) return fail(`No event "${input.event_id}" on this calendar. Call get_events first.`);
+
+    const wrong = eventProblem(base, { kind: ev.kind, raceType: ev.raceType, priority: input.priority });
+    if (wrong) return fail(wrong);
+
+    const stood = input.priority === 'primary' ? goalEvent(eventsOf(base)) : null;
+    const { draft, said } = writeEvents(
+      s, base,
+      upsertEvent(eventsOf(base), { ...ev, priority: asPriority(input.priority) }),
+      `${ev.name || 'The event'} on ${ev.date} is now ${input.priority === 'none' ? 'a marker only' : `a ${input.priority} race`}.` +
+        (stood && stood.id !== ev.id
+          ? ` ${stood.name || 'The previous race'} on ${stood.date} is now secondary.`
+          : ''),
+    );
+
+    const note = landingNote(draft, findEvent(draft, ev.id));
+    return ok([...said, note].filter(Boolean).join(' '));
+  },
+
+  remove_event(s, input) {
+    const base = draftOf(s);
+    const ev = findEvent(base, input.event_id);
+    if (!ev) return fail(`No event "${input.event_id}" on this calendar. Call get_events first.`);
+
+    const { said } = writeEvents(s, base, removeEvent(eventsOf(base), ev.id),
+      `Removed ${ev.name || 'the event'} on ${ev.date}.`);
+    return ok(said.join(' '));
   },
 };
 

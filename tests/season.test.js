@@ -8,6 +8,7 @@ import {
   seasonWeeks,
   seasonHours,
   fitToRace,
+  planLandings,
 } from '../assets/coach/season.js';
 
 /* Golden values taken from ../yootri-rnd/plan_model.py, which is the reference
@@ -52,7 +53,7 @@ test('the default season spends only part of the annual budget', () => {
 });
 
 test('unknown block names are rejected rather than silently defaulted', () => {
-  assert.throws(() => multiplier('Taper', 1), /unknown period/i);
+  assert.throws(() => multiplier('Sharpening', 1), /unknown period/i);
 });
 
 test('week numbers outside a block are rejected', () => {
@@ -128,4 +129,149 @@ test('resolved weeks carry the load multiplier that produced them', () => {
   assert.ok(season[0].load < 1, 'a prep week is easier than a flat average week');
   const hard = season.find((w) => w.block === 'Base 3' && w.week === 3);
   assert.ok(hard.load > 1, 'the last loading week of Base 3 is harder than average');
+});
+
+/* Landing a secondary race on the runway.
+
+   A season can hold more than one race. The primary one fixes the length and
+   keeps the model's own two-week peak plus race week; every other race gets a
+   *landing* — one taper week and one race week, spliced into whatever block it
+   falls in. The season never gets longer, because the primary's date is what
+   decides how long it is. */
+
+test('the taper interlude is exactly the peak block down week', () => {
+  // The claim the whole design rests on: a secondary landing is the primary's
+  // landing with the first peak week removed. Nothing new is invented, so this
+  // is an equality and not an approximation.
+  assert.equal(multiplier('Taper', 1), multiplier('Peak', 2));
+  assert.equal(weeklyHours(700, 'Taper', 1), weeklyHours(700, 'Peak', 2));
+});
+
+test('an interlude is not part of the season sequence', () => {
+  // It is spliced in, never walked through. If it leaked into the block list
+  // every season would silently grow a week and spend a week's more budget.
+  assert.equal(seasonWeeks(), 27);
+  assert.ok(!DEFAULT_SEASON.blocks.some((b) => b.name === 'Taper'));
+  assert.ok(Math.abs(seasonHours(700) - 391.5288) < 0.001);
+});
+
+test('a landing puts a taper week before the race week', () => {
+  const s = fitToRace({ annualHours: 700, weeks: 20, landings: [8] });
+  assert.equal(s[7].block, 'Taper');
+  assert.equal(s[8].block, 'Race');
+  assert.equal(s[7].hours, weeklyHours(700, 'Taper', 1));
+  assert.equal(s[8].hours, weeklyHours(700, 'Race', 1));
+  assert.equal(s[7].load, multiplier('Taper', 1));
+  assert.equal(s[8].load, multiplier('Race', 1));
+});
+
+test('a landing does not lengthen the season', () => {
+  // The primary race date decides the runway. A tune-up race comes out of the
+  // block it falls in; it does not push the season along.
+  const plain = fitToRace({ annualHours: 700, weeks: 20 });
+  const landed = fitToRace({ annualHours: 700, weeks: 20, landings: [8] });
+  assert.equal(landed.length, plain.length);
+  assert.deepEqual(landed.map((w) => w.absWeek), plain.map((w) => w.absWeek));
+});
+
+test('the weeks after a landing resume the block they were in', () => {
+  const plain = fitToRace({ annualHours: 700, weeks: 20 });
+  const landed = fitToRace({ annualHours: 700, weeks: 20, landings: [8] });
+  for (let i = 0; i < plain.length; i++) {
+    if (i === 7 || i === 8) continue;
+    assert.deepEqual(landed[i], plain[i], `week ${i} should be untouched`);
+  }
+});
+
+test('no landings leaves the season exactly as it was', () => {
+  // Every existing caller passes none of this, so the old output is the
+  // contract. Byte-identical, not merely equivalent.
+  const before = fitToRace({ annualHours: 700, weeks: 27 });
+  assert.equal(JSON.stringify(fitToRace({ annualHours: 700, weeks: 27, landings: [] })), JSON.stringify(before));
+  assert.equal(JSON.stringify(fitToRace({ annualHours: 700, weeks: 27 })), JSON.stringify(before));
+});
+
+test('more than one race can land in a season', () => {
+  const s = fitToRace({ annualHours: 700, weeks: 30, landings: [6, 16] });
+  assert.deepEqual([s[5].block, s[6].block], ['Taper', 'Race']);
+  assert.deepEqual([s[15].block, s[16].block], ['Taper', 'Race']);
+});
+
+test('a race in the first week lands without a taper week before it', () => {
+  // There is no week before week 0 to taper in. The race week is still built.
+  const s = fitToRace({ annualHours: 700, weeks: 20, landings: [0] });
+  assert.equal(s[0].block, 'Race');
+  assert.deepEqual(planLandings({ weeks: 20, landings: [0] }).applied, [{ absWeek: 0, taperWeek: null }]);
+});
+
+/* planLandings — which races the season model will actually build for, and why
+   it turned the others down. Exported so the page and the validator explain a
+   refusal with the same words rather than each deriving its own. */
+
+test('a landing inside the primary taper is refused', () => {
+  // The last three weeks are the primary race's own peak and race week. They
+  // are what the whole season was built to arrive at; nothing overwrites them.
+  const { applied, refused } = planLandings({ weeks: 20, landings: [17, 18, 19] });
+  assert.deepEqual(applied, []);
+  assert.deepEqual(refused, [
+    { absWeek: 17, reason: 'in-primary-taper' },
+    { absWeek: 18, reason: 'in-primary-taper' },
+    { absWeek: 19, reason: 'in-primary-taper' },
+  ]);
+  assert.deepEqual(planLandings({ weeks: 20, landings: [16] }).applied, [{ absWeek: 16, taperWeek: 15 }]);
+});
+
+test('two races too close together give the earlier one its taper', () => {
+  // A landing needs the week before it free. Two weeks apart is the closest
+  // two races can be and both still get one.
+  assert.deepEqual(planLandings({ weeks: 20, landings: [6, 7] }).refused, [{ absWeek: 7, reason: 'too-close' }]);
+  assert.deepEqual(planLandings({ weeks: 20, landings: [6, 7] }).applied, [{ absWeek: 6, taperWeek: 5 }]);
+  assert.deepEqual(planLandings({ weeks: 20, landings: [6, 8] }).applied, [
+    { absWeek: 6, taperWeek: 5 },
+    { absWeek: 8, taperWeek: 7 },
+  ]);
+});
+
+test('a race outside the runway is refused rather than clamped', () => {
+  // Clamping would build a taper for a race the season does not reach.
+  const { applied, refused } = planLandings({ weeks: 20, landings: [-1, 20, 99] });
+  assert.deepEqual(applied, []);
+  assert.deepEqual(refused.map((r) => r.reason), ['outside-season', 'outside-season', 'outside-season']);
+});
+
+test('planLandings is deterministic whatever order the races arrive in', () => {
+  const forwards = planLandings({ weeks: 24, landings: [4, 10, 11, 22] });
+  const backwards = planLandings({ weeks: 24, landings: [22, 11, 10, 4] });
+  assert.deepEqual(forwards, backwards);
+  assert.deepEqual(forwards.applied.map((a) => a.absWeek), [4, 10]);
+});
+
+test('the same race asked for twice is landed once', () => {
+  assert.deepEqual(planLandings({ weeks: 20, landings: [8, 8] }).applied, [{ absWeek: 8, taperWeek: 7 }]);
+  assert.deepEqual(planLandings({ weeks: 20, landings: [8, 8] }).refused, []);
+});
+
+test('fitToRace lands only what planLandings applied', () => {
+  // The two must never disagree: the page explains a refusal that the season
+  // model then quietly honoured anyway would be worse than either alone.
+  const s = fitToRace({ annualHours: 700, weeks: 20, landings: [6, 7, 18] });
+  assert.equal(s[5].block, 'Taper');
+  assert.equal(s[6].block, 'Race');
+  assert.notEqual(s[7].block, 'Race', 'the too-close race was not landed');
+  assert.equal(s[18].block, 'Peak', 'the primary taper is untouched');
+  assert.equal(s.at(-1).block, 'Race');
+});
+
+test('a landing never damages the race the season was built for', () => {
+  for (const weeks of [4, 8, 16, 27, 34]) {
+    for (const at of Array.from({ length: weeks }, (_, i) => i)) {
+      const s = fitToRace({ annualHours: 700, weeks, landings: [at] });
+      assert.equal(s.length, weeks);
+      assert.equal(s.at(-1).block, 'Race', `weeks=${weeks} landing=${at}`);
+      if (weeks >= 3) {
+        assert.equal(s.at(-2).block, 'Peak', `weeks=${weeks} landing=${at}`);
+        assert.equal(s.at(-3).block, 'Peak', `weeks=${weeks} landing=${at}`);
+      }
+    }
+  }
 });

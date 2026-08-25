@@ -46,7 +46,12 @@ const SPLITS = {
    long ride should stop growing once it reaches that — extra weekly volume is
    better spent on another session than on a fourth hour in the saddle. The
    athlete with less time needs the race-specific session *more*, not less.
-   Strength has no race-day equivalent and so has no entry. */
+   Strength has no race-day equivalent and so has no entry.
+
+   sprint and olympic are no longer offered as distances (see RACE_TYPES in
+   events.js) but keep their rows here, because a plan is self-contained: a
+   season already built for one has to go on being sized and validated as one
+   rather than falling back to the default and quietly becoming a 70.3. */
 const RACE_DEMAND = {
   sprint: { Swim: 30, Bike: 75, Run: 40 },
   olympic: { Swim: 45, Bike: 105, Run: 60 },
@@ -100,7 +105,9 @@ export function blockFamily(block) {
   const b = String(block ?? '');
   if (b.startsWith('Base')) return 'Base';
   if (b.startsWith('Build')) return 'Build';
-  if (b.startsWith('Peak')) return 'Peak';
+  // A Taper week is the Peak block's own down week spliced in for a tune-up
+  // race (see `interludes` in season.js), so it wants the peak shape too.
+  if (b.startsWith('Peak') || b.startsWith('Taper')) return 'Peak';
   if (b.startsWith('Race')) return 'Race';
   return 'Prep';
 }
@@ -316,16 +323,29 @@ function reconcile(placed, remaining, target) {
  * @param {object}  opts.profile   a normalized profile
  * @param {string} [opts.idPrefix] prefix for session ids; callers pass the week
  *                                 key so ids are unique across a whole plan
+ * @param {string} [opts.raceDay]  weekday a race falls on this week; nothing is
+ *                                 scheduled on it or after it
  * @returns {{sessions: object[], budgetMinutes: number, plannedMinutes: number, shortfallMinutes: number}}
  */
-export function generateWeek({ hours, block, profile, idPrefix = 'w' }) {
+export function generateWeek({ hours, block, profile, idPrefix = 'w', raceDay = null }) {
   const family = blockFamily(block);
   const budgetMinutes = Math.max(0, Math.round((Number(hours) || 0) * 60));
+
+  /* A race week is built around the day the race is on, not around the week it
+     happens to sit in. The season model lands the last week *containing* the
+     race rather than the last week *ending* on it, so a Saturday race has a
+     Sunday after it — and without this the week's biggest remaining day is
+     exactly where the placement pass would put a long ride, the day after the
+     race. Race day itself carries no session: the race is the event on the
+     calendar, and entering it as a twelve-hour session would trip the
+     single-session ceiling and distort every volume total on the chart. */
+  const raceIndex = DAYS.indexOf(raceDay);
+  const closedDays = raceIndex < 0 ? [] : DAYS.slice(raceIndex);
 
   // The shape table decides how the week falls across its days; availability is
   // only the ceiling that shape is clipped to. `targetMinutes` is what the
   // athlete can actually absorb — where a budget bigger than the week gets cut.
-  const budgets = dayBudgets({ budgetMinutes, profile });
+  const budgets = dayBudgets({ budgetMinutes, profile, closedDays });
   const target = budgets.targetMinutes;
 
   const targets = discTargets(target, block, profile, budgets);

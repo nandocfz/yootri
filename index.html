@@ -659,10 +659,17 @@
     cursor: pointer;
   }
   .cal-evt span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cal-evt.goal {
+  .cal-evt.primary {
     background: color-mix(in srgb, var(--color-accent) 26%, transparent);
     color: color-mix(in srgb, var(--color-accent) 88%, white);
     font-weight: 600;
+  }
+  /* A tune-up race reads as a race without competing with the one the season is
+     built around: the same hue, outlined rather than filled. */
+  .cal-evt.secondary {
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 40%, transparent);
+    color: color-mix(in srgb, var(--color-accent) 80%, white);
   }
   .cal-evt:hover { background: color-mix(in srgb, var(--color-accent) 34%, transparent); }
 
@@ -1294,6 +1301,7 @@
      a browser (`npm test`). This file keeps the markup, styles and DOM. */
   import {
     loadPlan, blockAt, weekCount, sessionsAt, refit, diffPlans, applyDraft, moveSession,
+    landingsOf,
   } from './assets/coach/plan.js';
   import { normalizeProfile, resolveWeekShape, SPREAD_MODES } from './assets/coach/profile.js';
   import { dayBudgets } from './assets/coach/shape.js';
@@ -1310,14 +1318,15 @@
   import {
     validateSeason, seasonFit, volumeBeyondRace, MIN_VARIATION_RETAINED,
   } from './assets/coach/validate.js';
-  import { fitToRace } from './assets/coach/season.js';
+  import { fitToRace, planLandings, LONG_RUNWAY_WEEKS } from './assets/coach/season.js';
   import { weeksUntil } from './assets/coach/dates.js';
   import {
-    dateOf, monthOf, firstOfMonth, addMonths, monthGrid, clampMonth,
+    dateOf, weekIndexOf, monthOf, firstOfMonth, addMonths, monthGrid, clampMonth,
   } from './assets/coach/calendar.js';
   import {
-    RACE_TYPES, normalizeEvents, upsertEvent, removeEvent, goalEvent, eventsByDate,
-    raceFieldsOf, seedEventsFromProfile,
+    RACE_TYPES, KNOWN_RACE_TYPES, SECONDARY_RACE_TYPES, raceTypeLabel,
+    normalizeEvents, upsertEvent, removeEvent,
+    goalEvent, eventsByDate, raceFieldsOf, seedEventsFromProfile,
   } from './assets/coach/events.js';
   import { suggest } from './assets/coach/adapt.js';
   import { runTurn } from './assets/coach/agent.js';
@@ -1626,9 +1635,10 @@
     els.startInput.value = state.start;
     els.totalWeeks.textContent = N;
 
-    const here = weekInfo(state.week);
     els.timeline.innerHTML = blockRuns().map((r) => {
-      const active = r.block === here.block;
+      // By week rather than by name: a season with a tune-up race in it has two
+      // runs called "Race", and comparing names lit up both of them.
+      const active = state.week >= r.start && state.week < r.start + r.weeks;
       return '<button type="button" class="ov-phase' + (active ? ' active' : '') + '"' +
         ' data-week="' + r.start + '" style="flex: ' + r.weeks + ' 1 0;">' +
         '<span class="name">' + esc(r.block) + '</span>' +
@@ -1830,9 +1840,10 @@
 
   function calEventHTML(ev) {
     const label = ev.name || (ev.kind === 'race' ? 'Race' : 'Event');
+    const title = label + (ev.priority ? ' · ' + PRIORITY_LABELS[ev.priority] : '');
     return (
-      '<button type="button" class="cal-evt' + (ev.goal ? ' goal' : '') + '" data-act="event"' +
-        ' data-id="' + esc(ev.id) + '" title="' + esc(label) + '">' +
+      '<button type="button" class="cal-evt' + (ev.priority ? ' ' + ev.priority : '') + '" data-act="event"' +
+        ' data-id="' + esc(ev.id) + '" title="' + esc(title) + '">' +
         '<i class="ph ' + (ev.kind === 'race' ? 'ph-flag-checkered' : 'ph-bookmark-simple') + '" aria-hidden="true"></i>' +
         '<span>' + esc(label) + '</span>' +
       '</button>'
@@ -2321,9 +2332,9 @@
 
   function openNewPlanPanel() {
     npMode = 'fitted';
-    const opts = ['sprint', 'olympic', '70.3', 'ironman']
-      .map((o) => '<option value="' + o + '"' + (o === plan.profile.raceType ? ' selected' : '') + '>' + o + '</option>')
-      .join('');
+    // A new plan is a new race, so a retired distance is not carried across
+    // even when the plan being copied from is built for one.
+    const opts = raceTypeOptions(plan.profile.raceType, { keepRetired: false });
 
     panelShell(
       '<h2>New plan</h2>' +
@@ -2660,20 +2671,59 @@
   const field = (label, control) =>
     '<label class="pnl-f"><span>' + label + '</span>' + control + '</label>';
 
-  /* The race date is the goal event's, so this form shows it rather than
+  /* The race-distance picker. RACE_TYPES is what a race may be given now; the
+     short distances were retired when the app settled on long-course racing.
+
+     A plan built before that still carries one, and gets its own value handed
+     back so that opening a panel cannot silently re-aim a season the athlete is
+     midway through. `keepRetired: false` is for a race that does not exist yet,
+     which has nothing to preserve and so may only pick from what is offered.
+
+     `pool` is which list is being offered. A race the season is *built for*
+     picks from RACE_TYPES, because that is what the volume model can be sized
+     by; a tune-up race picks from the wider SECONDARY_RACE_TYPES, because it is
+     a label on a taper the model has already decided the shape of. A marathon
+     can be one and not the other, and that is the whole distinction.
+
+     The option's value is the stored name and its text is the shown one, which
+     is the whole reason those are two things: what this select submits goes on
+     to key RACE_DEMAND and to sync, so it has to stay the name the engine
+     sizes a season by however the distance is styled on screen. */
+  function raceTypeOptions(current, { keepRetired = true, pool = RACE_TYPES } = {}) {
+    const list = keepRetired && KNOWN_RACE_TYPES.includes(current) && !pool.includes(current)
+      ? [...pool, current]
+      : pool;
+    return list
+      .map((o) => '<option value="' + esc(o) + '"' + (o === current ? ' selected' : '') +
+        '>' + esc(raceTypeLabel(o)) + '</option>')
+      .join('');
+  }
+
+  /* The race date is the primary race's, so this form shows it rather than
      offering a second place to set it. */
   function goalEventLabel() {
     const goal = goalEvent(state.events);
-    if (!goal) return 'No goal event yet — add one in Month view';
+    if (!goal) return 'No race chosen yet — add one in Month view';
     return esc((goal.name || 'Race') + ' · ' + fmtLongDate(goal.date));
   }
 
   /* ---- Events ------------------------------------------------------------
-     The goal event is the one the season is aimed at, so editing it is a plan
-     change and goes through the same review the Plan setup form does. Every
-     other event is a note on the calendar and is written straight away. */
+     A race carries a priority, and that is what the season is shaped by: the
+     primary race is what the whole season is built around, a secondary race is
+     a tune-up inside it and gets a taper week and a race week landed where it
+     falls. Either is a plan change and goes through the same review the Plan
+     setup form does. Anything else is a note on the calendar, written straight
+     away. */
 
-  const LONG_RUNWAY_WEEKS = 30;
+  const PRIORITY_LABELS = { primary: 'Main race', secondary: 'Tune-up race' };
+
+  const priorityOptions = (current) =>
+    '<option value="primary"' + (current === 'primary' ? ' selected' : '') +
+      '>Main race — build the season around it</option>' +
+    '<option value="secondary"' + (current === 'secondary' ? ' selected' : '') +
+      '>Tune-up race — taper and race week for it</option>' +
+    '<option value="none"' + (current ? '' : ' selected') +
+      '>Just a marker — changes nothing</option>';
 
   function openEventPanel(id) {
     const existing = state.events.find((x) => x.id === id) || null;
@@ -2683,26 +2733,26 @@
       date: dateOf(state.start, state.week, 'Sat') || state.start,
       kind: 'race',
       raceType: plan.profile.raceType,
-      goal: !goalEvent(state.events),
+      // The first race entered is the one the season is for; after that, a new
+      // race is a tune-up unless the athlete says otherwise.
+      priority: goalEvent(state.events) ? 'secondary' : 'primary',
       note: '',
     };
-    const typeOpts = RACE_TYPES
-      .map((o) => '<option value="' + o + '"' + (o === (ev.raceType || plan.profile.raceType) ? ' selected' : '') + '>' + o + '</option>')
-      .join('');
     const kindOpts = '<option value="race"' + (ev.kind === 'race' ? ' selected' : '') + '>Race</option>' +
       '<option value="other"' + (ev.kind === 'race' ? '' : ' selected') + '>Something else</option>';
 
     panelShell(
       '<h2>' + (existing ? 'Edit event' : 'Add event') + '</h2>' +
-      '<p class="pnl-sub">Anything worth seeing next to the training. Mark one as the event the season is built around.</p>' +
+      '<p class="pnl-sub">Anything worth seeing next to the training. A race can be the one the season is built around, or a tune-up along the way.</p>' +
       '<div class="pnl-grid">' +
         field('Name', '<input type="text" class="input" id="ev-name" value="' + esc(ev.name) + '" placeholder="e.g. Ironman Cascais" />') +
         field('Date', '<input type="date" class="input" id="ev-date" value="' + esc(ev.date) + '" />') +
         field('Kind', '<select class="input" id="ev-kind">' + kindOpts + '</select>') +
-        field('Race distance', '<select class="input" id="ev-type">' + typeOpts + '</select>') +
+        field('This race is', '<select class="input" id="ev-prio">' + priorityOptions(ev.priority) + '</select>') +
       '</div>' +
-      '<label class="np-check" id="ev-goal-row"><input type="checkbox" id="ev-goal"' + (ev.goal ? ' checked' : '') + ' />' +
-        '<span>Build the season around this event</span></label>' +
+      '<div class="pnl-grid">' +
+        field('Race distance', '<select class="input" id="ev-type"></select>') +
+      '</div>' +
       '<p class="pnl-hint" id="ev-hint"></p>' +
       '<div class="pnl-act">' +
         (existing ? '<button type="button" class="btn btn-ghost spacer danger" id="ev-del"><i class="ph ph-trash"></i> Delete</button>' : '') +
@@ -2712,18 +2762,36 @@
       existing ? 'Edit event' : 'Add event',
     );
 
+    /* The distance picker is rebuilt whenever the priority changes, because
+       which list is on offer depends on it: only a distance the volume model
+       can be sized by may be the main race, while a tune-up may be a marathon
+       or a shorter triathlon. An event that already carries a distance keeps
+       the offer of it, so opening a panel can never silently re-aim a season. */
+    const renderTypes = () => {
+      const wanted = $('ev-prio').value === 'primary' ? RACE_TYPES : SECONDARY_RACE_TYPES;
+      const current = $('ev-type').value || ev.raceType || plan.profile.raceType;
+      // A distance that is not in the list being offered simply goes unselected,
+      // and the browser falls back to the first option — which is what promoting
+      // a marathon to the main race should do, since it cannot be one.
+      $('ev-type').innerHTML = raceTypeOptions(current, {
+        keepRetired: !!existing?.raceType,
+        pool: wanted,
+      });
+    };
+
     const sync = () => {
       const isRace = $('ev-kind').value === 'race';
-      // Only a race can size a season, so the distance and the goal flag are
-      // meaningless on anything else.
+      // Only a race has a distance or a priority: a priority is an instruction
+      // to the season model, and a non-race has nothing to instruct it with.
       $('ev-type').closest('.pnl-f').classList.toggle('hidden', !isRace);
-      $('ev-goal-row').classList.toggle('hidden', !isRace);
-      if (!isRace) $('ev-goal').checked = false;
+      $('ev-prio').closest('.pnl-f').classList.toggle('hidden', !isRace);
+      if (!isRace) $('ev-prio').value = 'none';
+      renderTypes();
       renderEventHint();
     };
     $('ev-kind').addEventListener('change', sync);
     $('ev-date').addEventListener('change', renderEventHint);
-    $('ev-goal').addEventListener('change', renderEventHint);
+    $('ev-prio').addEventListener('change', () => { renderTypes(); renderEventHint(); });
     $('ev-cancel').addEventListener('click', closePanel);
     $('ev-save').addEventListener('click', () => saveEventFromPanel(ev.id));
     if (existing) $('ev-del').addEventListener('click', () => applyEvents(removeEvent(state.events, ev.id)));
@@ -2731,55 +2799,87 @@
     $('ev-name').focus();
   }
 
-  /* What building the season around this date would mean, said before the
-     athlete commits to it rather than after. */
+  /* What this race would do to the season, said before the athlete commits to
+     it rather than after. */
   function renderEventHint() {
     const el = $('ev-hint');
     if (!el) return;
     const date = $('ev-date').value;
-    const goal = $('ev-goal').checked && $('ev-kind').value === 'race';
-    if (!goal || !date) { el.innerHTML = ''; return; }
+    const priority = $('ev-kind').value === 'race' ? $('ev-prio').value : 'none';
+    if (priority === 'none' || !date) { el.innerHTML = ''; return; }
 
-    const weeks = weeksUntil(state.start, date);
-    if (!weeks) { el.innerHTML = ''; return; }
     if (parseISO(date) < parseISO(state.start)) {
-      el.innerHTML = 'That date is before this plan starts, so the season cannot be built towards it. ' +
+      el.innerHTML = 'That date is before this plan starts, so there is no calendar to put it on. ' +
         'Move the start date, or start a new plan.';
       return;
     }
-    el.innerHTML = 'The season becomes <b>' + weeks + ' week' + (weeks === 1 ? '' : 's') +
-      '</b> long, ending on this date.' +
-      (weeks > LONG_RUNWAY_WEEKS
-        ? ' That is a long runway: the early weeks come out as a repeat of the first block rather ' +
-          'than a shape built for it, so it is worth starting a plan closer to the date instead.'
-        : '');
+
+    if (priority === 'primary') {
+      const weeks = weeksUntil(state.start, date);
+      if (!weeks) { el.innerHTML = ''; return; }
+      el.innerHTML = 'The season becomes <b>' + weeks + ' week' + (weeks === 1 ? '' : 's') +
+        '</b> long, ending on this date.' +
+        (weeks > LONG_RUNWAY_WEEKS
+          ? ' That is a long runway: the early weeks come out as a repeat of the first block rather ' +
+            'than a shape built for it, so it is worth starting a plan closer to the date instead.'
+          : '');
+      return;
+    }
+
+    /* A tune-up race. Ask the season model itself where it would land rather
+       than describing the rule again here — the two saying different things is
+       the failure worth designing out. */
+    const at = weekIndexOf(state.start, date);
+    const { applied, refused } = planLandings({ weeks: totalWeeks(), landings: [at] });
+    if (applied.length) {
+      el.innerHTML = 'Week <b>' + (at + 1) + '</b> becomes its race week' +
+        (at > 0 ? ', with week <b>' + at + '</b> as a taper week before it' : '') +
+        ', out of the block those weeks are in now. The season stays ' + totalWeeks() + ' weeks long.';
+      return;
+    }
+    el.innerHTML = {
+      'in-primary-taper': 'That falls inside the taper for the race this season is built around, so ' +
+        'no separate taper week is built for it. The race still goes on the calendar.',
+      'too-close': 'That is too close to another race in this plan for both to have a taper week, ' +
+        'so only the earlier one gets one. The race still goes on the calendar.',
+      'outside-season': 'That is past the end of this season, so it goes on the calendar as a marker ' +
+        'and nothing is built for it yet.',
+    }[refused[0]?.reason] ?? '';
   }
 
   function saveEventFromPanel(id) {
     const date = $('ev-date').value;
     if (!date) { $('ev-hint').innerHTML = 'An event needs a date.'; return; }
     const kind = $('ev-kind').value;
+    const priority = $('ev-prio').value;
     applyEvents(upsertEvent(state.events, {
       id,
       name: $('ev-name').value,
       date,
       kind,
       raceType: kind === 'race' ? $('ev-type').value : null,
-      goal: kind === 'race' && $('ev-goal').checked,
-    }));
+      priority: kind === 'race' && priority !== 'none' ? priority : null,
+    }), id);
   }
 
   /**
-   * Write an edited event list. When it changes which race the season is aimed
-   * at, that is a plan change: it builds a draft and shows the same review the
-   * setup form does. Otherwise the list is just written.
+   * Write an edited event list. When it changes the shape of the season — the
+   * race it is aimed at, or where a tune-up race lands in it — that is a plan
+   * change: it builds a draft and shows the same review the setup form does.
+   * Otherwise the list is just written.
    */
-  function applyEvents(next) {
+  function applyEvents(next, editedId = null) {
     const goal = goalEvent(next);
     const race = raceFieldsOf(next);
-    const movesTheSeason = !!goal &&
+    const landedIn = (events) =>
+      JSON.stringify(landingsOf({ start: state.start, events }).sort((a, b) => a - b));
+
+    const movesTheSeason = (!!goal &&
       (race.raceDate !== plan.profile.raceDate ||
-        (!!race.raceType && race.raceType !== plan.profile.raceType));
+        (!!race.raceType && race.raceType !== plan.profile.raceType))) ||
+      // A tune-up race takes a taper week and a race week out of the block it
+      // falls in, which is as much a change to the training as moving the date.
+      landedIn(plan.events) !== landedIn(next);
 
     if (!movesTheSeason) {
       state.events = next;
@@ -2799,14 +2899,22 @@
       raceDate: race.raceDate,
       ...(race.raceType ? { raceType: race.raceType } : {}),
     });
-    draft = refit(plan, { profile, weeks: weeksUntil(state.start, race.raceDate) ?? FALLBACK_WEEKS });
-    draft.events = next;
+    // The new list goes *in*, not on afterwards: refit reads the events to work
+    // out where the tune-up races land, so handing it the old ones would build
+    // the season the athlete is trying to change.
+    const runway = race.raceDate ? weeksUntil(state.start, race.raceDate) : null;
+    draft = refit({ ...plan, events: next }, {
+      profile,
+      // Only a race the season is aimed at can move its length. With none, the
+      // weeks already built stay as they are — they have already been trained.
+      ...(runway ? { weeks: runway } : {}),
+    });
 
     const d = diffPlans(plan, draft);
     // Review disables Apply when no week changes, which would strand the event
     // edit — so when only the date moved, write it straight through.
     if (!d.weeks.length) applyRefit();
-    else renderDiff(d, () => openEventPanel(goal.id));
+    else renderDiff(d, () => openEventPanel(editedId ?? goal?.id));
   }
 
   /* ---- About & disclaimer ----
@@ -3082,9 +3190,7 @@
       DAYS.map((d) => opt(d, 'Go to ' + d, shape.spread === d)).join('');
     const swimCap = (p.constraints.find((c) => c.disc === 'Swim' && c.rule === 'maxPerWeek') || {}).value;
     const planned = plan.season.reduce((a, w) => a + Math.round(w.hours * 60), 0);
-    const opts = RACE_TYPES
-      .map((o) => '<option value="' + o + '"' + (o === p.raceType ? ' selected' : '') + '>' + o + '</option>')
-      .join('');
+    const opts = raceTypeOptions(p.raceType);
 
     panelShell(
       '<h2>Plan setup</h2>' +
@@ -3213,7 +3319,7 @@
     const beyond = volumeBeyondRace(season, profile);
     if (beyond) {
       el.innerHTML = 'The hardest week would reach <b>' + fmtTotal(beyond.peakMinutes) +
-        '</b> of training for a ' + esc(raceType) + ' — about <b>' +
+        '</b> of training for ' + esc(raceTypeLabel(raceType) || 'this race') + ' — about <b>' +
         Math.round(beyond.multiple) + '×</b> what the distance itself calls for. ' +
         'Check the race distance and the hours are both right.';
       return;
@@ -3239,7 +3345,7 @@
     draft = refit(plan, { profile });
     // The distance is still set here, and the goal event holds one too — write
     // it across so the two can never disagree about the same race.
-    draft.events = state.events.map((e) => (e.goal ? { ...e, raceType: profile.raceType } : e));
+    draft.events = state.events.map((e) => (e.priority === 'primary' ? { ...e, raceType: profile.raceType } : e));
     renderDiff(diffPlans(plan, draft));
   }
 
@@ -3755,7 +3861,7 @@
       '<dl class="imp-facts">' +
         fact('Starts', esc(fmtLongDate(s.start))) +
         fact('Length', s.weeks + ' week' + (s.weeks === 1 ? '' : 's')) +
-        fact('Race', esc(s.raceType || '—') + (s.raceDate ? ' · ' + esc(fmtLongDate(s.raceDate)) : '')) +
+        fact('Race', esc(raceTypeLabel(s.raceType) || '—') + (s.raceDate ? ' · ' + esc(fmtLongDate(s.raceDate)) : '')) +
         fact('Annual budget', s.annualHours ? Math.round(s.annualHours) + ' h' : '—') +
         fact('Planned volume', esc(fmtTotal(s.plannedMinutes) || '0m')) +
         fact('Your history', esc(history)) +

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { TOOL_DEFS, createSession, callTool, sessionDiff } from '../assets/coach/tools.js';
-import { loadPlan, newPlan, sessionsAt } from '../assets/coach/plan.js';
+import { loadPlan, newPlan, sessionsAt, weekCount } from '../assets/coach/plan.js';
 import { setActual } from '../assets/coach/actuals.js';
 import { durToMin } from '../assets/coach/duration.js';
 
@@ -414,4 +414,207 @@ test('the paces tool description says where the number came from', () => {
   const def = TOOL_DEFS.find((t) => t.name === 'get_training_paces');
   assert.ok(def, 'the tool is declared');
   assert.match(def.description, /entered|typed|imported/i);
+});
+
+/* ---- Events ---------------------------------------------------------------
+
+   The one place the model can change what the season is *for* rather than how
+   it is trained, so the two rules that hold everywhere here matter most: a
+   write lands in the draft, and a refusal leaves nothing behind. */
+
+// 20 weeks from a Monday start, aimed at a Sunday IRONMAN.
+const racePlan = () => newPlan({
+  name: 'Season', startISO: '2026-11-02', raceDate: '2027-03-21', raceType: 'ironman', now: 1,
+});
+const eventsIn = (s) => parse(call(s, 'get_events')).events;
+const idOf = (s, name) => eventsIn(s).find((e) => e.name === name).id;
+const tuneUp = (over = {}) => ({
+  name: 'Lisbon', date: '2027-01-24', kind: 'race', race_type: '70.3', priority: 'secondary', ...over,
+});
+
+test('get_events says what is on the calendar and where it falls', () => {
+  const s = createSession(racePlan());
+  const out = parse(call(s, 'get_events'));
+  assert.equal(out.events.length, 1);
+  assert.equal(out.events[0].priority, 'primary');
+  assert.equal(out.events[0].week, 20, 'weeks count from 1, as the athlete sees them');
+  assert.equal(out.events[0].weekday, 'Sun');
+  assert.equal(out.events[0].raceTypeName, 'IRONMAN', 'named the way the app names it');
+});
+
+test('adding a tune-up race lands a taper week and a race week', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'add_event', tuneUp());
+  assert.equal(r.isError, false);
+  assert.match(r.content, /week 12/i);
+  assert.match(r.content, /taper/i);
+  assert.equal(s.draft.season[11].block, 'Race');
+  assert.equal(s.draft.season[10].block, 'Taper');
+  assert.equal(weekCount(s.draft), 20, 'a tune-up race does not lengthen the season');
+});
+
+test('an event write goes into the draft, never into the plan', () => {
+  const s = createSession(racePlan());
+  const before = JSON.stringify(s.plan);
+  call(s, 'add_event', tuneUp());
+  assert.equal(JSON.stringify(s.plan), before);
+  assert.ok(s.draft);
+});
+
+test('get_events reads the draft, so the model sees its own change', () => {
+  const s = createSession(racePlan());
+  call(s, 'add_event', tuneUp());
+  const out = parse(call(s, 'get_events'));
+  assert.equal(out.events.length, 2);
+  assert.deepEqual(out.tunedUpWeeks, [{ raceWeek: 12, taperWeek: 11 }]);
+  assert.deepEqual(out.noTaperBuilt, []);
+});
+
+test('get_events says which races got no taper, and why', () => {
+  const s = createSession(racePlan());
+  call(s, 'add_event', tuneUp({ name: 'Late', date: '2027-03-07' }));
+  const out = parse(call(s, 'get_events'));
+  assert.deepEqual(out.tunedUpWeeks, []);
+  assert.deepEqual(out.noTaperBuilt, [{ week: 18, reason: 'in-primary-taper' }]);
+});
+
+test('a race with no taper built is said plainly when it is added', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'add_event', tuneUp({ date: '2027-03-07' }));
+  assert.equal(r.isError, false, 'the race is real; it just gets no separate taper');
+  assert.match(r.content, /no separate taper week/i);
+});
+
+test('a marathon cannot be made the race the season is built around', () => {
+  // The guard on the whole two-list split, at the boundary the model reaches
+  // it through: profile.raceType keys RACE_DEMAND and a marathon has no row.
+  const s = createSession(racePlan());
+  const r = call(s, 'add_event', tuneUp({ race_type: 'marathon', priority: 'primary' }));
+  assert.equal(r.isError, true);
+  assert.match(r.content, /secondary/, 'the refusal says what to do instead');
+  assert.equal(s.draft, null, 'a rejected call leaves no draft behind');
+});
+
+test('a marathon is perfectly fine as a tune-up race', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'add_event', tuneUp({ name: 'Sevilla', race_type: 'marathon' }));
+  assert.equal(r.isError, false);
+  assert.equal(s.draft.season[11].block, 'Race');
+});
+
+test('a date before the plan starts is refused with the reason', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'add_event', tuneUp({ date: '2026-09-01' }));
+  assert.equal(r.isError, true);
+  assert.match(r.content, /2026-11-02/, 'it says what the start date actually is');
+  assert.equal(s.draft, null);
+});
+
+test('a date nothing can read is refused rather than dropped', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'add_event', tuneUp({ date: 'next spring' }));
+  assert.equal(r.isError, true);
+  assert.match(r.content, /YYYY-MM-DD/);
+  assert.equal(s.draft, null);
+});
+
+test('a distance nothing knows is refused rather than silently dropped', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'add_event', tuneUp({ race_type: 'moon marathon' }));
+  assert.equal(r.isError, true);
+  assert.equal(s.draft, null);
+});
+
+test('only a race can be the race the season is built around', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'add_event', { name: 'Wedding', date: '2027-01-24', kind: 'other', priority: 'primary' });
+  assert.equal(r.isError, true);
+  assert.equal(s.draft, null);
+});
+
+test('moving the primary race re-lengths the season', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'move_event', { event_id: idOf(s, 'Race day'), date: '2027-04-18' });
+  assert.equal(r.isError, false);
+  assert.equal(weekCount(s.draft), 24);
+  assert.match(r.content, /24 weeks/);
+  assert.equal(s.draft.profile.raceDate, '2027-04-18', 'the profile follows the race, not the other way round');
+});
+
+test('a race far enough out is landed but said to be a long runway', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'move_event', { event_id: idOf(s, 'Race day'), date: '2027-08-15' });
+  assert.equal(r.isError, false);
+  assert.match(r.content, /long runway/i);
+});
+
+test('promoting a race stands the previous one down to secondary', () => {
+  const s = createSession(racePlan());
+  call(s, 'add_event', tuneUp());
+  const r = call(s, 'set_event_priority', { event_id: idOf(s, 'Lisbon'), priority: 'primary' });
+  assert.equal(r.isError, false);
+  const after = eventsIn(s);
+  assert.equal(after.find((e) => e.name === 'Lisbon').priority, 'primary');
+  assert.equal(after.find((e) => e.name === 'Race day').priority, 'secondary',
+    'the athlete is still doing that race');
+  assert.match(r.content, /secondary/);
+  assert.equal(weekCount(s.draft), 12, 'the season now ends on the new primary race');
+});
+
+test('standing a race down to a marker takes back the taper built for it', () => {
+  const s = createSession(racePlan());
+  call(s, 'add_event', tuneUp());
+  assert.equal(s.draft.season[11].block, 'Race');
+  call(s, 'set_event_priority', { event_id: idOf(s, 'Lisbon'), priority: 'none' });
+  assert.notEqual(s.draft.season[11].block, 'Race');
+  assert.notEqual(s.draft.season[10].block, 'Taper');
+});
+
+test('removing the race the season is built around says what that means', () => {
+  const s = createSession(racePlan());
+  const r = call(s, 'remove_event', { event_id: idOf(s, 'Race day') });
+  assert.equal(r.isError, false);
+  assert.match(r.content, /keeps its current length/i);
+  assert.equal(weekCount(s.draft), 20, 'the weeks already built are already trained');
+  assert.equal(s.draft.profile.raceDate, null);
+});
+
+test('an id nothing holds is refused and points at get_events', () => {
+  const s = createSession(racePlan());
+  for (const [name, input] of [
+    ['move_event', { event_id: 'nope', date: '2027-01-24' }],
+    ['set_event_priority', { event_id: 'nope', priority: 'secondary' }],
+    ['remove_event', { event_id: 'nope' }],
+  ]) {
+    const r = call(s, name, input);
+    assert.equal(r.isError, true, name);
+    assert.match(r.content, /get_events/, name);
+    assert.equal(s.draft, null, `${name} left a draft behind`);
+  }
+});
+
+test('a refused event write leaves an earlier draft exactly as it was', () => {
+  // The rule that makes a confused model harmless: a rejected call is a no-op,
+  // not a partial write on top of work the athlete has not seen yet.
+  const s = createSession(racePlan());
+  call(s, 'add_event', tuneUp());
+  const staged = JSON.stringify(s.draft);
+  call(s, 'add_event', tuneUp({ name: 'Bad', date: 'whenever' }));
+  assert.equal(JSON.stringify(s.draft), staged);
+});
+
+test('an event change is something the athlete gets to approve', () => {
+  const s = createSession(racePlan());
+  call(s, 'add_event', tuneUp());
+  const d = sessionDiff(s);
+  assert.ok(d.weeks.length > 0);
+  assert.equal(d.blocked, false);
+});
+
+test('get_plan_summary shows the calendar alongside the blocks', () => {
+  const s = createSession(racePlan());
+  call(s, 'add_event', tuneUp());
+  const out = parse(call(s, 'get_plan_summary'));
+  assert.deepEqual(out.events.map((e) => e.name), ['Lisbon', 'Race day']);
+  assert.ok(out.blocks.some((b) => b.block === 'Taper'), 'and says where the tune-up landed');
 });

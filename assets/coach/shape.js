@@ -211,15 +211,25 @@ function prescribe({ weight, avail, fixed, pinned, target, blocked, spread }) {
  * athlete whose week cannot hold the whole budget still gets the shape their
  * volume calls for rather than the shape of a lighter week.
  *
+ * `closedDays` are days this *particular* week cannot use — race day and the
+ * days after it. They are not a profile edit: availability is the athlete's
+ * standing ceiling, and editing it to close a day would still be closing it
+ * next week. Closing a day here is exactly a rest day for one week, so the
+ * minutes it gives up reappear on the days that are left rather than vanishing.
+ *
  * @param {object}  opts
  * @param {number}  opts.budgetMinutes  what the season model asked for
  * @param {object}  opts.profile        a normalized profile
+ * @param {string[]} [opts.closedDays]  weekdays this week cannot use at all
  * @param {object} [opts.table]         override the built-in table
  * @returns {{perDay: Record<string, number>, targetMinutes: number}}
  */
-export function dayBudgets({ budgetMinutes, profile, table = DEFAULT_SHAPE_TABLE }) {
+export function dayBudgets({ budgetMinutes, profile, closedDays = [], table = DEFAULT_SHAPE_TABLE }) {
   const budget = Math.max(0, Math.round(Number(budgetMinutes) || 0));
-  const avail = Object.fromEntries(DAYS.map((d) => [d, profile?.availability?.[d] || 0]));
+  const shut = new Set(Array.isArray(closedDays) ? closedDays : [closedDays]);
+  const avail = Object.fromEntries(
+    DAYS.map((d) => [d, shut.has(d) ? 0 : profile?.availability?.[d] || 0]),
+  );
   const capacity = DAYS.reduce((a, d) => a + avail[d], 0);
   const target = Math.min(budget, capacity);
   const shape = resolveWeekShape(profile);

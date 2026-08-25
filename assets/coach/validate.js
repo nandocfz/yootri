@@ -13,6 +13,8 @@
 
 import { DAYS, allowedDays, weeklyAvailableMinutes } from './profile.js';
 import { raceDemandMinutes } from './generate.js';
+import { raceTypeLabel } from './events.js';
+import { isTaperBlock } from './season.js';
 import { durToMin } from './duration.js';
 
 const MIN_SESSION = 20;
@@ -166,16 +168,40 @@ export function validateWeek(sessions, { profile, budgetMinutes, weekIndex = 0 }
   return out;
 }
 
+/* A race the season model could not build a taper week for, said in the words
+   the athlete needs rather than the reason code `planLandings` returns.
+
+   `outside-season` has no entry on purpose. The calendar draws a race beyond
+   the end of the plan deliberately — that is exactly the race you have not
+   built for yet — so warning about every parked future race would be noise. */
+const REFUSED_LANDING = {
+  'in-primary-taper': ['race-in-primary-taper',
+    'A race here falls inside the taper for the race this season is built around, ' +
+    'so no separate taper week was built for it.'],
+  'too-close': ['races-too-close',
+    'A race here is too close to another race in this plan for both to have a taper ' +
+    'week, so only the earlier one has one.'],
+};
+
 /**
  * Check a whole season — the rules that only exist across weeks.
  * @param {{absWeek: number, block: string, recovery: boolean, sessions: object[]}[]} weeks
+ * @param {object} [ctx]
+ * @param {object} [ctx.profile]
+ * @param {{absWeek: number, reason: string}[]} [ctx.refusedLandings] races the
+ *        season model turned down a taper for; see planLandings in season.js
  */
-export function validateSeason(weeks, { profile } = {}) {
+export function validateSeason(weeks, { profile, refusedLandings } = {}) {
   const out = [];
 
   weeks.forEach((w, i) => {
     if (profile) out.push(...validateWeek(w.sessions, { profile, weekIndex: w.absWeek ?? i }));
   });
+
+  for (const r of refusedLandings ?? []) {
+    const said = REFUSED_LANDING[r?.reason];
+    if (said) out.push(issue('warn', said[0], r.absWeek, said[1]));
+  }
 
   /* Is the plan aimed at the race it says it is? A budget can be absurd for a
      distance without ever being clipped — an athlete who reports an empty diary
@@ -188,7 +214,7 @@ export function validateSeason(weeks, { profile } = {}) {
     out.push(
       issue('warn', 'volume-beyond-race', null,
         `The hardest week reaches ${fmtH(beyond.peakMinutes)} of training for ` +
-        `${profile.raceType ?? 'this race'} — around ${Math.round(beyond.multiple)} times ` +
+        `${raceTypeLabel(profile.raceType) || 'this race'} — around ${Math.round(beyond.multiple)} times ` +
         `the race-specific work the distance itself calls for. Check that the race ` +
         `distance and the annual hours are both right.`),
     );
@@ -223,7 +249,8 @@ export function validateSeason(weeks, { profile } = {}) {
   let lastLoading = null;
   let lastBlock = null;
   let blockPeak = null;
-  let prevBlockPeak = null;
+  let blockLoaded = false;
+  let lastLoadingBlockPeak = null;
   let enteredBlock = false;
   let loadingRun = 0;
 
@@ -233,8 +260,15 @@ export function validateSeason(weeks, { profile } = {}) {
     const block = String(w.block ?? '');
 
     if (lastBlock !== null && block !== lastBlock) {
-      prevBlockPeak = blockPeak;
+      // Measured against the last block that actually *loaded*, not simply the
+      // one before. A season can now hold a tune-up race, and a taper week and
+      // a race week are deliberate down weeks — resuming training after one is
+      // a return to where the athlete was, not a step up from a rest week. Held
+      // as the last loading block rather than skipped, so the ceiling still
+      // applies coming out of a race and does not become a blind spot.
+      if (blockLoaded) lastLoadingBlockPeak = blockPeak;
       blockPeak = null;
+      blockLoaded = false;
       lastLoading = null;
       enteredBlock = true;
     }
@@ -245,11 +279,11 @@ export function validateSeason(weeks, { profile } = {}) {
       return;
     }
 
-    if (enteredBlock && prevBlockPeak !== null && mins > prevBlockPeak * MAX_BLOCK_STEP) {
-      const pct = Math.round((mins / prevBlockPeak - 1) * 100);
+    if (enteredBlock && lastLoadingBlockPeak !== null && mins > lastLoadingBlockPeak * MAX_BLOCK_STEP) {
+      const pct = Math.round((mins / lastLoadingBlockPeak - 1) * 100);
       out.push(
         issue('warn', 'block-step-too-steep', idx,
-          `${block} opens ${pct}% above the previous block's hardest week (${fmtH(prevBlockPeak)} → ${fmtH(mins)}).`),
+          `${block} opens ${pct}% above the previous block's hardest week (${fmtH(lastLoadingBlockPeak)} → ${fmtH(mins)}).`),
       );
     }
     enteredBlock = false;
@@ -259,6 +293,7 @@ export function validateSeason(weeks, { profile } = {}) {
     // (hand-built weeks, migrated plans) fall back to counting every non-recovery
     // week, which is conservative rather than silently skipping the rule.
     const isLoading = typeof w.load === 'number' ? w.load >= 1 : true;
+    blockLoaded = blockLoaded || isLoading;
 
     if (isLoading) {
       loadingRun++;
@@ -283,18 +318,26 @@ export function validateSeason(weeks, { profile } = {}) {
     blockPeak = Math.max(blockPeak ?? 0, mins);
   });
 
-  // The taper must actually taper: once into Peak/Race, volume only comes down.
-  const taperFrom = weeks.findIndex((w) => /^(Peak|Race)/.test(String(w.block ?? '')));
-  if (taperFrom !== -1) {
-    for (let i = taperFrom + 1; i < weeks.length; i++) {
-      const prev = totalMinutes(weeks[i - 1].sessions);
-      const cur = totalMinutes(weeks[i].sessions);
-      if (cur > prev) {
-        out.push(
-          issue('warn', 'taper-not-decreasing', weeks[i].absWeek ?? i,
-            `Volume rises into race week (${fmtH(prev)} → ${fmtH(cur)}); the taper should only come down.`),
-        );
-      }
+  /* The taper must actually taper: within a run of taper weeks, volume only
+     comes down.
+
+     Within a run, and not simply from the first one to the end of the season.
+     A season can hold a tune-up race now, and the weeks after its race week are
+     the plan resuming rather than a taper going backwards — measured to the end
+     this fired on every one of them.
+
+     A run's first week is deliberately not compared with the week before it. A
+     race landing straight after a recovery week would read as volume rising
+     into the taper when it is the recovery week that was the low point. */
+  for (let i = 1; i < weeks.length; i++) {
+    if (!isTaperBlock(weeks[i].block) || !isTaperBlock(weeks[i - 1].block)) continue;
+    const prev = totalMinutes(weeks[i - 1].sessions);
+    const cur = totalMinutes(weeks[i].sessions);
+    if (cur > prev) {
+      out.push(
+        issue('warn', 'taper-not-decreasing', weeks[i].absWeek ?? i,
+          `Volume rises into race week (${fmtH(prev)} → ${fmtH(cur)}); the taper should only come down.`),
+      );
     }
   }
 

@@ -230,3 +230,57 @@ test('no day is ever given less than a session is worth', () => {
       `${d} was given ${r.perDay[d]} minutes — too little to train`);
   }
 });
+
+/* Closed days — the days a week cannot use at all.
+
+   A race week is the case this exists for: nothing is trained on race day, and
+   nothing after it. Availability is the athlete's standing ceiling and must not
+   be edited to say so, because it would still say so next week. */
+
+test('a closed day is given nothing', () => {
+  const p = normalizeProfile({});
+  const r = dayBudgets({ budgetMinutes: 600, profile: p, closedDays: ['Sat', 'Sun'] });
+  assert.equal(r.perDay.Sat, 0);
+  assert.equal(r.perDay.Sun, 0);
+});
+
+test('a closed day hands its minutes to the days that are left', () => {
+  // Not lost, and not silently shrinking the week: the same rule a rest day in
+  // `availability` already follows.
+  const p = normalizeProfile({});
+  const open = dayBudgets({ budgetMinutes: 300, profile: p });
+  const closed = dayBudgets({ budgetMinutes: 300, profile: p, closedDays: ['Sun'] });
+  assert.equal(sum(perDayList(open)), open.targetMinutes);
+  assert.equal(sum(perDayList(closed)), closed.targetMinutes);
+  assert.ok(closed.perDay.Sat >= open.perDay.Sat, 'Saturday takes some of what Sunday gave up');
+});
+
+test('closing a day lowers what the week can hold', () => {
+  // Capacity is the sum of the days that are open. A week whose budget outran
+  // the days left has to come down, exactly as it does for a rest day.
+  const p = normalizeProfile({ availability: { Mon: 60, Tue: 60, Wed: 60, Thu: 60, Fri: 60, Sat: 60, Sun: 60 } });
+  const r = dayBudgets({ budgetMinutes: 420, profile: p, closedDays: ['Fri', 'Sat', 'Sun'] });
+  assert.equal(r.targetMinutes, 240);
+  assert.equal(sum(perDayList(r)), 240);
+});
+
+test('closing days works with the shape switched off too', () => {
+  const p = normalizeProfile({ weekShape: { enabled: false } });
+  const r = dayBudgets({ budgetMinutes: 600, profile: p, closedDays: ['Sun'] });
+  assert.equal(r.perDay.Sun, 0);
+});
+
+test('a pin on a closed day does not reopen it', () => {
+  // A pin is an instruction, but it cannot invent time on a day the week does
+  // not have — the same rule that already caps a pin at the day's availability.
+  const p = normalizeProfile({ weekShape: { pins: { Sun: 90 } } });
+  const r = dayBudgets({ budgetMinutes: 600, profile: p, closedDays: ['Sun'] });
+  assert.equal(r.perDay.Sun, 0);
+});
+
+test('closing nothing is the same as not asking', () => {
+  const p = normalizeProfile({});
+  const plain = dayBudgets({ budgetMinutes: 540, profile: p });
+  assert.deepEqual(dayBudgets({ budgetMinutes: 540, profile: p, closedDays: [] }), plain);
+  assert.deepEqual(dayBudgets({ budgetMinutes: 540, profile: p, closedDays: ['Blursday'] }), plain);
+});
