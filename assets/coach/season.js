@@ -36,6 +36,20 @@ export const DEFAULT_SEASON = {
     { name: 'Peak', weeks: 2, load: 1.1, recovery: [], ramp: [1.0, 0.8] },
     { name: 'Race', weeks: 1, load: 0.7, recovery: [] },
   ],
+  /* Blocks that are never walked through, only spliced in — see fitToRace.
+
+     A secondary race gets the primary's landing with the first peak week
+     removed: one taper week, then the model's own Race week. So Taper is not a
+     new opinion about how hard a down week should be, it is the Peak block's
+     own second week written out on its own — same load, same ramp position,
+     and tests/season.test.js asserts the two are equal rather than close.
+
+     Kept out of `blocks` because `expand`, `seasonWeeks` and `seasonHours` walk
+     that list: an interlude in there would add a week to every season and a
+     week's hours to every budget. */
+  interludes: [
+    { name: 'Taper', weeks: 1, load: 1.1, recovery: [], ramp: [0.8, 0.8] },
+  ],
   ramp: [0.85, 1.0],
   recovery: 0.7,
   roundTo: 0.5,
@@ -43,10 +57,12 @@ export const DEFAULT_SEASON = {
 
 const norm = (s) => String(s ?? '').trim().toLowerCase();
 
+const allBlocks = (season) => [...season.blocks, ...(season.interludes ?? [])];
+
 export function blockOf(period, season = DEFAULT_SEASON) {
-  const hit = season.blocks.find((b) => norm(b.name) === norm(period));
+  const hit = allBlocks(season).find((b) => norm(b.name) === norm(period));
   if (!hit) {
-    const names = season.blocks.map((b) => b.name).join(', ');
+    const names = allBlocks(season).map((b) => b.name).join(', ');
     throw new Error(`unknown period ${JSON.stringify(period)}; choose from [${names}]`);
   }
   return hit;
@@ -96,6 +112,88 @@ function expand(season) {
   return out;
 }
 
+/* Which block names are part of a taper — the run of weeks that comes down into
+   a race, whether the season's own or a landing's. One definition, because
+   validate.js polices the same set and two regexes would drift. */
+const TAPER_FAMILY_RE = /^(Peak|Taper|Race)/i;
+export const isTaperBlock = (block) => TAPER_FAMILY_RE.test(String(block ?? ''));
+
+/** How many weeks at the end of the season belong to the race it was built for.
+    Read off the block table rather than hardcoded, so it stays right if the
+    tail is ever reshaped. */
+function primaryTailWeeks(season) {
+  let weeks = 0;
+  for (let i = season.blocks.length - 1; i >= 0; i--) {
+    if (!isTaperBlock(season.blocks[i].name)) break;
+    weeks += season.blocks[i].weeks;
+  }
+  return weeks;
+}
+
+/** The closest two races can be and both still get a taper week: a landing
+    needs the week before it free, and a race week is not a taper. */
+export const MIN_LANDING_GAP = 2;
+
+/** Past this, `fitToRace` is padding the front by repeating the first block
+    rather than building a shape for the runway — a long run of Prep and then
+    the normal blocks. Structurally valid, not a good plan, so the page and the
+    coach both say so before the athlete commits to a date that far out.
+
+    An unfitted guess, like the rest of the coaching numbers: roughly where a
+    season stops being one build and starts being two. See
+    ../yootri-rnd/FINDINGS.md, 23 Aug. */
+export const LONG_RUNWAY_WEEKS = 30;
+
+/**
+ * Which secondary races the season model will build for, and why it turned the
+ * others down.
+ *
+ * Exported because three callers need the same answer and must not each derive
+ * their own: `fitToRace` splices what this applies, the validator explains what
+ * it refused, and the page says so before the athlete commits.
+ *
+ * @param {object} opts
+ * @param {number} opts.weeks      length of the runway
+ * @param {number[]} opts.landings absolute weeks the secondary races fall in
+ * @returns {{applied: {absWeek: number, taperWeek: number|null}[],
+ *            refused: {absWeek: number, reason: string}[]}}
+ */
+export function planLandings({ weeks, landings = [], season = DEFAULT_SEASON } = {}) {
+  const n = Number(weeks);
+  // The last weeks are the primary race's own peak and race week — what the
+  // whole season was built to arrive at. Nothing overwrites them.
+  const firstTailWeek = Number.isInteger(n) && n > 0 ? Math.max(0, n - primaryTailWeeks(season)) : 0;
+
+  const wanted = [...new Set((Array.isArray(landings) ? landings : []).map(Number))]
+    .sort((a, b) => (Number.isNaN(a) ? 1 : Number.isNaN(b) ? -1 : a - b));
+
+  const applied = [];
+  const refused = [];
+
+  for (const absWeek of wanted) {
+    if (!Number.isInteger(absWeek) || absWeek < 0 || absWeek >= n) {
+      // Not clamped: clamping would build a taper for a race the season never
+      // reaches, which is worse than saying the race is outside it.
+      refused.push({ absWeek, reason: 'outside-season' });
+      continue;
+    }
+    if (absWeek >= firstTailWeek) {
+      refused.push({ absWeek, reason: 'in-primary-taper' });
+      continue;
+    }
+    const last = applied.at(-1);
+    if (last && absWeek - last.absWeek < MIN_LANDING_GAP) {
+      refused.push({ absWeek, reason: 'too-close' });
+      continue;
+    }
+    // Week 0 has no week before it to taper in. The race week is still built:
+    // a race in the first week of the plan is still a race.
+    applied.push({ absWeek, taperWeek: absWeek > 0 ? absWeek - 1 : null });
+  }
+
+  return { applied, refused };
+}
+
 /** Resolve the block model onto a concrete runway of `weeks`, landing the last
     week on the race.
 
@@ -103,9 +201,14 @@ function expand(season) {
     are what you cannot skip, whereas base volume is what you never got to build.
     A long runway pads the front with prep weeks rather than stretching the taper.
 
+    `landings` are the weeks any *secondary* races fall in. Each one that
+    `planLandings` accepts is spliced in as a taper week and a race week, taken
+    out of whatever block it landed in. The season does not get longer for them:
+    the primary race's date is what decides how long it is.
+
     Returns plain data — a plan stores this once rather than recomputing it, so a
     later change to the model never silently reshapes an athlete's saved season. */
-export function fitToRace({ annualHours, weeks, season = DEFAULT_SEASON }) {
+export function fitToRace({ annualHours, weeks, landings = [], season = DEFAULT_SEASON }) {
   const n = Number(weeks);
   if (!Number.isInteger(n) || n < 1) {
     throw new Error(`a season needs at least one week; got ${JSON.stringify(weeks)}`);
@@ -124,6 +227,14 @@ export function fitToRace({ annualHours, weeks, season = DEFAULT_SEASON }) {
       pad.push({ block: prep.name, week: w, recovery: prep.recovery.includes(w) });
     }
     chosen = pad.concat(full);
+  }
+
+  // `chosen` is already indexed by absolute week, so a landing is a straight
+  // splice. Two weeks of whatever block it fell in become the tune-up race's
+  // taper and race week; the weeks either side keep the labels they had.
+  for (const { absWeek, taperWeek } of planLandings({ weeks: n, landings, season }).applied) {
+    chosen[absWeek] = { block: 'Race', week: 1, recovery: false };
+    if (taperWeek !== null) chosen[taperWeek] = { block: 'Taper', week: 1, recovery: false };
   }
 
   return chosen.map((e, i) => ({

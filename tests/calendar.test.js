@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  dateOf, weekIndexOf, monthOf, firstOfMonth, addMonths, monthGrid, clampMonth,
+  dateOf, weekdayOf, weekIndexOf, monthOf, firstOfMonth, addMonths, monthGrid, clampMonth,
 } from '../assets/coach/calendar.js';
+import { DAYS } from '../assets/coach/profile.js';
 
 /* A month view has to agree with the week board about which calendar date a
    session falls on, so both sides derive it here. Like dates.js this is all UTC
@@ -172,4 +173,25 @@ test('clamping has no answer rather than a wrong one', () => {
 
 test('a range that ends before it starts still gives a usable month', () => {
   assert.equal(clampMonth('2027-01', { fromISO: '2026-08-17', toISO: '2026-01-01' }), '2026-08');
+});
+
+/* weekdayOf — which day of the week a date is. The generator needs it to build
+   a race week around the race rather than around the week it sits in. */
+
+test('a date knows which weekday it is', () => {
+  assert.equal(weekdayOf('2027-07-25'), 'Sun');
+  assert.equal(weekdayOf('2027-07-26'), 'Mon');
+  assert.equal(weekdayOf('2027-07-24'), 'Sat');
+});
+
+test('weekdayOf is the inverse of the weekday half of dateOf', () => {
+  for (const day of DAYS) {
+    assert.equal(weekdayOf(dateOf('2026-08-17', 5, day)), day);
+  }
+});
+
+test('a date nothing can read is not a weekday', () => {
+  assert.equal(weekdayOf('next tuesday'), null);
+  assert.equal(weekdayOf(null), null);
+  assert.equal(weekdayOf(undefined), null);
 });

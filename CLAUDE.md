@@ -33,8 +33,8 @@ case-insensitive macOS filesystem otherwise hides until Pages serves it.
 | `portable.js` | The plan-file envelope: what `exportPlan` writes and what `Import plan…` will accept. Import is total — every bad file comes back as a reason, never a throw. |
 | `duration.js` | `"H:MM"` ↔ minutes, the format the app already stores. |
 | `calendar.js` | Week-and-weekday ↔ real date, and the Monday-start month grid the calendar view draws. |
-| `events.js` | The athlete's events. One is the *goal event*, and it is the only source of the plan's race date and distance. |
-| `paces.js` | Running paces. Daniels' VDOT model over one benchmark result, and the benchmark list that holds it — same one-is-flagged shape as `events.js`. |
+| `events.js` | The athlete's events. Races carry a *priority*: one is `primary` and is the only source of the plan's race date and distance, any number are `secondary` and get a taper landed on them. Also holds the lists of distances a race may be, and what each one is called on screen. |
+| `paces.js` | Running paces. Daniels' VDOT model over one benchmark result, and the benchmark list that holds it — the one-is-flagged shape `events.js` used before races needed three states. |
 | `activities.js` | Reading an activity export. Garmin's activity CSV, plus the arithmetic the page's TCX/GPX readers need. Total, like `portable.js`. |
 
 **Nothing edits a stored plan in place.** A change builds a *draft* (a detached
@@ -45,9 +45,76 @@ Plan setup form goes through the same ceremony a model would.
 Events live on the plan as `events`, alongside `weekBudgets` — both are fields
 added without a schema bump, because `migratePlan` passes a v3 record through
 untouched and export/import/sync all carry unknown top-level fields. The one
-event flagged `goal` owns `profile.raceDate` and `profile.raceType`; moving it
-re-fits the season through the same draft → diff → apply flow the setup form
-uses, which is why Plan setup only *shows* the race date.
+race flagged `priority: 'primary'` owns `profile.raceDate` and `profile.raceType`;
+moving it re-fits the season through the same draft → diff → apply flow the setup
+form uses, which is why Plan setup only *shows* the race date. `normalizeEvent`
+reads a legacy `goal: true` as `primary`, which is how that field changed with no
+schema bump — do not reintroduce `goal` as a stored field.
+
+**A season can hold more than one race.** A race marked `secondary` is a tune-up
+inside the build: `planLandings` in `season.js` decides where it lands and
+`fitToRace` splices in one **taper week** and one **race week**, taken out of
+whatever block those weeks were in. The season never gets longer for it — the
+primary's date is what decides the length. The secondary taper week is not a new
+opinion about how hard a down week should be: it is `multiplier('Peak', 2)`
+written out as its own block, so a secondary landing is the primary's landing with
+the first peak week removed. `planLandings` is the only place the rule lives — the
+page, the validator and the coach tools all ask it rather than re-deriving it, so
+the refusal the athlete is shown is the same refusal the model honoured.
+
+**Nothing is scheduled on a race day or on the days after it.** `generateWeek`
+takes a `raceDay`, and `raceDayFor` in `plan.js` supplies it for any week a
+prioritised race falls in — including one the model refused a taper for, because
+the athlete is racing that day either way. A race early in the week therefore
+leaves the rest of that week clear; `tests/plan.test.js` pins the Monday case so
+it reads as a decision rather than a bug. See `../yootri-rnd/FINDINGS.md`
+(25 Aug) for the latent bug this fixed in the *primary* race week.
+
+**yootri plans long-course endurance racing only, and the distance list is three
+lists because of it.** Each answers a different question:
+
+- `RACE_TYPES` — what the race a season is *built for* may be: `70.3` and
+  `ironman`. This is what a picker offers for a primary race.
+- `KNOWN_RACE_TYPES` — what may reach `profile.raceType`, and so what a season may
+  be *sized by*: the above plus the retired `sprint` and `olympic`. Every name
+  here has a `RACE_DEMAND` row in `generate.js`. A plan is self-contained, so a
+  season already built for a sprint has to go on being sized and validated as one
+  rather than falling back to the default and quietly becoming a 70.3.
+- `SECONDARY_RACE_TYPES` — what a *secondary* race may be: `10k`,
+  `half-marathon`, `marathon`, `sprint`, `olympic`, and the long-course two. It
+  can afford to be wider precisely because a secondary race never reaches
+  `profile.raceType` — it is a label on a taper the model has already decided the
+  shape of, so it needs no `RACE_DEMAND` row.
+
+`normalizeEvent` enforces the boundary: a race marked `primary` whose distance is
+not in `KNOWN_RACE_TYPES` is **demoted to secondary**, never dropped. Without that
+a marathon would reach `profile.raceType`, `demandFor` would fall back to a 70.3,
+and the season would be sized for a race nobody entered. `eventProblem` in
+`tools.js` refuses the same thing with a sentence the coach can act on.
+
+In the page, `raceTypeOptions()` builds every distance picker from one rule: a
+record that already carries a retired distance is handed its own value back, so
+opening a panel can never silently re-aim a season, while a race being chosen now
+may only pick from the pool its priority allows. **Do not put a short distance
+back in `RACE_TYPES` or `KNOWN_RACE_TYPES`, and do not delete the retired rows
+from `RACE_DEMAND`.**
+
+**What a distance is stored as and what it is called are two things.** The
+stored name — `70.3`, `ironman` — is a key: it indexes `RACE_DEMAND`, it syncs
+to Firestore, it is written into every exported plan file, and it is what a
+season already under way is sized and validated by. `raceTypeLabel` in
+`events.js` maps it to the name the athlete reads (`IM 70.3`, `IRONMAN`); a
+distance with no entry is shown as it is stored, which is what a distance out of
+a plan file this app did not write wants. Every place a distance is *shown* goes
+through it — the pickers'
+option text, the Plan setup fit hint, the import preview's Race row, and the
+`volume-beyond-race` warning — while every place one is *stored* keeps the key,
+including each `<option value>`. **Restyling a name must never change a stored
+one**: renaming the key would re-aim every plan that already carries it, because
+`demandFor` falls back to the default distance without saying so, and a season
+built for an ironman would quietly be sized as a 70.3. Note the copy has no
+article before the label — "a IRONMAN" is wrong and "an IM 70.3" only works for
+one of the two, so both messages read "…of training for IRONMAN".
 
 Running paces work the same way. `benchmarks` is a third such field: a list of
 results the athlete entered or picked out of an export, exactly one flagged
