@@ -1257,6 +1257,7 @@
     <footer class="im-foot">
       <span>yootri is a training planner, not medical advice. Free and open source (MIT).</span>
       <button type="button" class="im-foot-link" id="about-btn">About &amp; disclaimer</button>
+      <button type="button" class="im-foot-link" id="privacy-btn">Privacy notice</button>
     </footer>
 
     <div id="modal-root"></div>
@@ -1557,6 +1558,7 @@
     timeline: $('phase-timeline'), seasonFill: $('season-fill'), seasonPos: $('season-pos'),
     setupBtn: $('setup-btn'), coachBtn: $('coach-btn'), panelRoot: $('panel-root'),
     aboutBtn: $('about-btn'),
+    privacyBtn: $('privacy-btn'),
     adviceRoot: $('advice-root'), orientRoot: $('orient-root'),
     prevWeek: $('prev-week'), nextWeek: $('next-week'),
     weekPos: $('week-pos'), weekRange: $('week-range'),
@@ -2776,9 +2778,47 @@
     ['No warranty as to results.',
       'yootri makes no guarantee of fitness improvement, race outcome, or any other result. The software is provided "as is" under the MIT licence, without warranty of any kind.'],
     ['Your data.',
-      'Everything you enter is stored in your own browser. If you choose to sign in, your plans sync to Google Cloud Firestore under your own account and are readable only by you. Your API key is stored in this browser only and is never synced or exported. Coach conversations are never synced.'],
+      'Everything you enter is stored in your own browser. If you choose to sign in, your plans sync to Google Cloud Firestore under your own account and are readable only by you. Your API key is stored in this browser only and is never synced or exported. Coach conversations are never synced. The privacy notice, linked from the footer, sets out exactly what is held and how to have it deleted.'],
     ['Nothing here excludes or limits liability where the law does not allow it,',
       'including liability for death or personal injury.'],
+  ];
+
+  /* ---- Privacy notice ----
+
+     Cloud sync makes this project the controller of somebody else's training
+     data, and a notice is what the law requires in return. It is kept in the
+     same shape as the disclaimer above — a data array, rendered in a panel a
+     user can actually reach — rather than a linked PDF nobody opens.
+
+     Two values below are deliberately empty. A notice without a working contact
+     route is not a notice, and the Firestore region cannot be guessed from the
+     client. Both render as a loud marker until they are filled in, and
+     `tests/index-html.test.js` fails while either is blank, so neither can be
+     published by forgetting. */
+
+  const PRIVACY_CONTACT = '';
+  const PRIVACY_REGION = '';
+  const PRIVACY_VERSION = '2026-08-23';
+
+  const mustSet = (v, name) => v || '\u26a0 SET ' + name + ' BEFORE PUBLISHING';
+
+  const PRIVACY_SECTIONS = () => [
+    ['Who is responsible.',
+      'Gustavo Zarruk, Norway, sole developer of yootri. For any question or request about your data, write to ' + mustSet(PRIVACY_CONTACT, 'PRIVACY_CONTACT') + '.'],
+    ['Signed out, nothing is collected.',
+      'yootri stores your plans in this browser and works fully without an account. Everything below applies only if you choose to sign in.'],
+    ['What is stored if you sign in.',
+      'From Google: an account identifier, your email address and your display name. From yootri: your plans — the schedule, your profile settings, which sessions you marked done, and what you logged against them, including any note you typed. It is held in Google Cloud Firestore, in ' + mustSet(PRIVACY_REGION, 'PRIVACY_REGION') + '. Google acts as the processor.'],
+    ['What never leaves this browser, signed in or not.',
+      'Your AI provider API key, and every coach conversation. These are stripped before anything is sent and are not in an export either.'],
+    ['What it is used for.',
+      'Making your plans available on your other devices. That is the only purpose. There is no analytics, no tracking, no advertising, and your data is never shared or sold.'],
+    ['The basis for it.',
+      'Your consent, asked for separately the first time you sign in, and withdrawable at any time without losing anything stored in this browser.'],
+    ['How long it is kept.',
+      'Until you delete it. Deleting your cloud data removes both the plans and the account record, and takes effect immediately.'],
+    ['Not intended for children.',
+      'yootri is not directed at children under 16 and should not be used by them without a parent or guardian.'],
   ];
 
   /* Shown once, on a browser that has never run yootri before. It is an
@@ -2850,6 +2890,123 @@
       'About and disclaimer',
     );
     $('ab-close').addEventListener('click', closePanel);
+  }
+
+  /* ---- Sync consent ----
+
+     Signing in is not consent. The account exists so that plans can sync, and
+     agreeing to that is a separate, affirmative act which has to be as easy to
+     take back as it was to give.
+
+     Nothing is read from or written to the cloud until `hasSyncConsent()` is
+     true. The guards sit on each call site rather than in one wrapper, so a new
+     path cannot bypass the question by forgetting to route through it.
+
+     The version is the notice's date. Change the notice materially, change the
+     version, and everyone is asked again rather than being held to a document
+     they never saw. */
+
+  const SYNC_CONSENT_KEY = 'yootri_sync_consent_v1';
+
+  function syncConsent() {
+    try { return JSON.parse(localStorage.getItem(SYNC_CONSENT_KEY) || 'null'); }
+    catch (e) { return null; }
+  }
+  const hasSyncConsent = () => syncConsent()?.version === PRIVACY_VERSION;
+  function recordSyncConsent() {
+    try {
+      localStorage.setItem(SYNC_CONSENT_KEY, JSON.stringify({
+        version: PRIVACY_VERSION, at: new Date().toISOString(),
+      }));
+    } catch (e) {}
+  }
+  function forgetSyncConsent() {
+    try { localStorage.removeItem(SYNC_CONSENT_KEY); } catch (e) {}
+  }
+
+  function openSyncConsentPanel() {
+    panelShell(
+      '<h2>Turn on sync?</h2>' +
+      '<p class="pnl-sub">You are signed in. Nothing has been sent yet.</p>' +
+      '<div class="legal">' +
+        '<p>Turning sync on copies your plans — the schedule, your profile, what you marked done and what you logged — to Google Cloud Firestore, so they follow you to your other devices. Your Google email address and display name are stored alongside them.</p>' +
+        '<p><b>Your API key and your coach conversations are never sent</b>, signed in or not.</p>' +
+        '<p>You can turn this off and delete everything at any time, from the privacy notice in the footer. Either way your plans stay in this browser.</p>' +
+      '</div>' +
+      '<div class="pnl-act">' +
+        '<button type="button" class="btn btn-ghost" id="sc-no">No thanks</button>' +
+        '<button type="button" class="btn btn-primary" id="sc-yes">Turn on sync</button>' +
+      '</div>',
+      'Turn on sync',
+    );
+    $('sc-yes').addEventListener('click', async () => {
+      recordSyncConsent();
+      closePanel();
+      renderAccount();
+      await pullFromCloud();
+    });
+    $('sc-no').addEventListener('click', async () => {
+      closePanel();
+      setStatus('Signing out…');
+      // Declining should leave nothing behind. No plan has been written yet, but
+      // signing in created an account record, and that is the half that
+      // identifies them — so it goes rather than merely being signed out of.
+      try { await window.imCloud.eraseEverything(); }
+      catch (e) {
+        console.error(e);
+        try { await window.imCloud.signOut(); } catch (e2) { console.error(e2); }
+      }
+    });
+  }
+
+  function openPrivacyPanel() {
+    const signedIn = !!authUser;
+    panelShell(
+      '<h2>Privacy notice</h2>' +
+      '<p class="pnl-sub">Version ' + esc(PRIVACY_VERSION) + ' — what yootri holds if you sign in, and how to get rid of it.</p>' +
+      '<div class="legal">' +
+        PRIVACY_SECTIONS().map(([head, body]) =>
+          '<p><b>' + esc(head) + '</b> ' + esc(body) + '</p>').join('') +
+      '</div>' +
+      '<div class="pnl-sec">' +
+        '<p class="legal-about"><b>Your rights.</b> You can ask for a copy of your data, correct it, have it deleted, or withdraw your consent. ' +
+          'A copy needs no asking — <b>Plan menu → Export this plan</b> writes out everything yootri holds about a plan. ' +
+          'Corrections you make by editing the plan. Deletion is the button below. ' +
+          'If you believe your data has been mishandled you can complain to ' +
+          '<a href="https://www.datatilsynet.no/" target="_blank" rel="noopener">Datatilsynet</a>.</p>' +
+        (signedIn
+          ? '<p class="legal-about">You are signed in as ' + esc(authUser.email || 'your account') + '.</p>'
+          : '<p class="legal-about">You are not signed in, so there is nothing held outside this browser to delete.</p>') +
+      '</div>' +
+      '<div class="pnl-act">' +
+        (signedIn ? '<button type="button" class="btn btn-ghost danger" id="pv-erase">Delete my cloud data</button>' : '') +
+        '<button type="button" class="btn btn-primary" id="pv-close">Close</button>' +
+      '</div>',
+      'Privacy notice',
+    );
+    $('pv-close').addEventListener('click', closePanel);
+    if (signedIn) $('pv-erase').addEventListener('click', eraseCloudData);
+  }
+
+  async function eraseCloudData() {
+    const ok = await confirmDialog(
+      'Delete your cloud data?',
+      'This removes every plan yootri has stored for your account, and the account record itself — your email address and name. It cannot be undone. Your plans stay in this browser, and yootri keeps working signed out.',
+      'Delete everything',
+    );
+    if (!ok) return;
+    setStatus('Deleting…');
+    try {
+      await window.imCloud.eraseEverything();
+      forgetSyncConsent();
+      closePanel();
+      setStatus('Cloud data deleted — saved on this device');
+    } catch (e) {
+      // Plans are deleted before the account, so a failure here can leave the
+      // account record behind. Say that rather than implying nothing happened.
+      console.error(e);
+      setStatus('Deletion did not finish — sign in again and retry', true);
+    }
   }
 
   const SPREAD_LABELS = {
@@ -3232,18 +3389,18 @@
   const cloudReady = () => !!(window.imCloud && window.imCloud.configured);
 
   function schedulePush() {
-    if (!cloudReady() || !authUser) return;
+    if (!cloudReady() || !authUser || !hasSyncConsent()) return;
     setStatus('Saving…');
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => pushPlan(plan), 900);
   }
   async function pushPlan(p) {
-    if (!cloudReady() || !authUser) return;
+    if (!cloudReady() || !authUser || !hasSyncConsent()) return;
     try { await window.imCloud.savePlan(p); setStatus('Synced ' + timeStr()); }
     catch (e) { console.error(e); setStatus('Sync failed — saved locally', true); }
   }
   async function cloudDelete(id) {
-    if (!cloudReady() || !authUser) return;
+    if (!cloudReady() || !authUser || !hasSyncConsent()) return;
     try { await window.imCloud.deletePlan(id); } catch (e) { console.error(e); }
   }
 
@@ -3293,8 +3450,12 @@
   async function onAuth(user) {
     authUser = user;
     renderAccount();
-    if (user) await pullFromCloud();
-    else setStatus('Saved on this device');
+    if (!user) { setStatus('Saved on this device'); return; }
+    // The pull is gated too, not just the push. Reading somebody's plans back
+    // out is processing as much as writing them, and at this point they have
+    // agreed to neither.
+    if (!hasSyncConsent()) { openSyncConsentPanel(); return; }
+    await pullFromCloud();
   }
 
   function bindCloud() {
@@ -3642,6 +3803,15 @@
         'title="Sign-in is unavailable here — your plans are saved in this browser">' +
         '<i class="ph ph-hard-drives"></i> Local only</button>';
       $('local-only').addEventListener('click', openLocalOnlyPanel);
+    } else if (authUser && !hasSyncConsent()) {
+      // Signed in, nothing agreed to, nothing sent. Dismissing the consent panel
+      // lands here rather than in a state with no way back to the question.
+      els.account.innerHTML =
+        '<button type="button" class="account-note" id="sync-off" ' +
+        'title="Signed in, but sync is off — your plans are saved in this browser">' +
+        '<i class="ph ph-cloud-slash"></i> Sync off</button>' +
+        '<button type="button" class="btn btn-ghost" data-acct="signout">Sign out</button>';
+      $('sync-off').addEventListener('click', openSyncConsentPanel);
     } else if (authUser) {
       els.account.innerHTML =
         '<span class="account-email"><i class="ph ph-cloud-check"></i>' + esc(authUser.email || 'Signed in') + '</span>' +
@@ -3827,6 +3997,7 @@
   els.setupBtn.addEventListener('click', openSetupPanel);
   els.coachBtn.addEventListener('click', openCoach);
   els.aboutBtn.addEventListener('click', openAboutPanel);
+  els.privacyBtn.addEventListener('click', openPrivacyPanel);
   // The one pair of arrows serves whichever view is on screen.
   els.prevWeek.addEventListener('click', () => {
     if (state.view === 'month') stepMonth(-1);
@@ -4092,7 +4263,7 @@
        (see firestore.rules); deploy those before relying on sync. -->
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js';
-    import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js';
+    import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, deleteUser, reauthenticateWithPopup } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js';
     import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js';
 
     const firebaseConfig = {
@@ -4151,6 +4322,30 @@
         async deletePlan(id) {
           if (!uid) return;
           await deleteDoc(doc(db, 'users', uid, 'plans', id));
+        },
+        // Erasure, in the GDPR sense rather than the tidying-up sense. The plans
+        // are the training data; the account record is the athlete's name, email
+        // and photo, and deleting one without the other leaves the half that
+        // identifies them. So both go, plans first — if the account went first
+        // there would be no uid left to reach the documents with.
+        async eraseEverything() {
+          if (!uid) throw new Error('Not signed in');
+          const snap = await getDocs(collection(db, 'users', uid, 'plans'));
+          for (const d of snap.docs) await deleteDoc(d.ref);
+          const user = auth.currentUser;
+          try {
+            await deleteUser(user);
+          } catch (e) {
+            // Firebase refuses to delete an account on a session it considers
+            // stale, and says so in a code rather than a message. One fresh
+            // sign-in is worth attempting before handing the failure back: the
+            // documents are already gone, and leaving the account behind is
+            // exactly the outcome this method exists to prevent.
+            if (e && e.code === 'auth/requires-recent-login') {
+              await reauthenticateWithPopup(user, provider);
+              await deleteUser(auth.currentUser);
+            } else throw e;
+          }
         },
       };
     } catch (e) {
