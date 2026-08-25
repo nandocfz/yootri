@@ -2790,14 +2790,15 @@
      same shape as the disclaimer above — a data array, rendered in a panel a
      user can actually reach — rather than a linked PDF nobody opens.
 
-     Two values below are deliberately empty. A notice without a working contact
-     route is not a notice, and the Firestore region cannot be guessed from the
-     client. Both render as a loud marker until they are filled in, and
-     `tests/index-html.test.js` fails while either is blank, so neither can be
-     published by forgetting. */
+     Two values below cannot be derived from anything else in the repo: the
+     contact route, because a notice without a working one is not a notice, and
+     the Firestore region, because the client config does not say where the data
+     actually sits. They are filled in for this deployment; a fork has to set
+     its own. Either left blank renders a loud marker in the notice and fails
+     `tests/index-html.test.js`, so neither can be published by forgetting. */
 
-  const PRIVACY_CONTACT = '';
-  const PRIVACY_REGION = '';
+  const PRIVACY_CONTACT = 'gzarruk@gmail.com';
+  const PRIVACY_REGION = 'eur3 (Europe)';
   const PRIVACY_VERSION = '2026-08-23';
 
   const mustSet = (v, name) => v || '\u26a0 SET ' + name + ' BEFORE PUBLISHING';

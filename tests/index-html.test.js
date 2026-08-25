@@ -224,9 +224,9 @@ test('the privacy notice has a contact route and a named region', () => {
   /* Cloud sync makes this project the controller of somebody else's training
      data, and two facts in the notice cannot be derived from anything in the
      repo: how to reach the controller, and which region Firestore actually
-     holds the data in. Both are left blank in the source on purpose, so that
-     the omission is a failing test rather than a notice that quietly tells a
-     user nothing. Fill them in and this passes. */
+     holds the data in. Blanking either is a failing test rather than a notice
+     that quietly tells a user nothing — which is also what a fork hits until it
+     puts its own values there (FIREBASE_SETUP.md, step 7). */
   for (const name of ['PRIVACY_CONTACT', 'PRIVACY_REGION']) {
     const m = HTML.match(new RegExp(`const\\s+${name}\\s*=\\s*'([^']*)'`));
     assert.ok(m, `${name} is gone from index.html — was the privacy notice removed?`);
