@@ -363,3 +363,55 @@ test('set_week_shape rejects a pin on something that is not a weekday', () => {
   assert.equal(r.isError, true);
   assert.equal(s.draft, null);
 });
+
+/* ---- training paces ---------------------------------------------------
+
+   A read-only tool, so it takes no draft and changes nothing. It exists so the
+   coach quotes the same number the panel shows: asked "what pace on Thursday?",
+   a model without this answers from its own head, and its head does not know
+   the athlete's benchmark. */
+
+const withBenchmark = () => ({
+  ...basePlan(),
+  benchmarks: [{
+    id: 'bm-1', date: '2026-06-15', distanceMeters: 10000, timeSeconds: 2520,
+    source: 'manual', label: 'Sentrum 10K', current: true,
+  }],
+});
+
+test('the paces tool reports the benchmark, the VDOT and the bands', () => {
+  const out = parse(call(createSession(withBenchmark()), 'get_training_paces'));
+
+  assert.equal(out.benchmark.distanceMeters, 10000);
+  assert.equal(out.benchmark.timeSeconds, 2520);
+  assert.equal(out.benchmark.date, '2026-06-15');
+  assert.ok(Math.abs(out.vdot - 49.1) < 0.1);
+
+  assert.deepEqual(Object.keys(out.zones), ['easy', 'threshold', 'interval', 'repetition']);
+  assert.equal(out.zones.threshold.perKm, '4:19 - 4:32');
+  assert.equal(out.zones.easy.perMile, '8:00 - 9:35');
+});
+
+test('the paces tool says plainly that there is no benchmark yet', () => {
+  // Not an error: "the athlete has not entered a result" is a real answer, and
+  // an error result invites the model to retry a tool that will never work.
+  const out = call(createSession(basePlan()), 'get_training_paces');
+  assert.equal(out.isError, false);
+  assert.match(out.content, /no .*result|has not/i);
+});
+
+test('reading the paces leaves no draft behind', () => {
+  const s = createSession(withBenchmark());
+  call(s, 'get_training_paces');
+  assert.equal(sessionDiff(s).weeks.length, 0);
+  assert.equal(s.draft, null, 'a read never starts a draft');
+});
+
+test('the paces tool description says where the number came from', () => {
+  // Tool descriptions are load-bearing safety text here: a model that thinks
+  // the app measured this will speak about it very differently from one that
+  // knows the athlete typed in a race result.
+  const def = TOOL_DEFS.find((t) => t.name === 'get_training_paces');
+  assert.ok(def, 'the tool is declared');
+  assert.match(def.description, /entered|typed|imported/i);
+});

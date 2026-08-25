@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { generateWeek, weekMinutes, raceDemandMinutes } from '../assets/coach/generate.js';
+import { ZONE_FOR_LABEL } from '../assets/coach/paces.js';
 import { normalizeProfile, DAYS } from '../assets/coach/profile.js';
 import { durToMin } from '../assets/coach/duration.js';
 import { dayBudgets } from '../assets/coach/shape.js';
@@ -424,4 +425,52 @@ test('switching the shape off never builds more than the week asked for', () => 
     assert.ok(weekMinutes(sessions) <= budgetMinutes,
       `${hours}h built ${weekMinutes(sessions)} against a ${budgetMinutes} budget`);
   }
+});
+
+/* ---- pace zones -------------------------------------------------------
+
+   A Run session carries the pace band it is asking for, so a card can resolve
+   it into real numbers against whatever benchmark the athlete has now. The
+   band is derived from the session's own zone label rather than from a second
+   block table, so the two can never drift apart — and a session whose zone was
+   edited by hand or by the coach gets the matching pace without extra work. */
+
+test('a generated Run session says which pace band it wants', () => {
+  const base = generateWeek({ hours: 8, block: 'Base 2', profile: normalizeProfile({}), idPrefix: 'w0' });
+  const runs = base.sessions.filter((s) => s.disc === 'Run');
+  assert.ok(runs.length, 'the fixture week has running in it');
+  for (const r of runs) assert.equal(r.paceZone, 'easy', 'a Base run is easy running');
+
+  const build = generateWeek({ hours: 8, block: 'Build 1', profile: normalizeProfile({}), idPrefix: 'w0' });
+  for (const r of build.sessions.filter((s) => s.disc === 'Run')) {
+    assert.equal(r.paceZone, 'threshold', 'a Build run is threshold work');
+  }
+});
+
+test('the pace band always matches the zone label on the same card', () => {
+  // One source of truth: a card reading "Z3–Z4" and a pace band saying "easy"
+  // would be the app disagreeing with itself in the space of one line.
+  for (const block of ['Prep', 'Base 1', 'Build 2', 'Peak', 'Race']) {
+    for (const s of generateWeek({ hours: 8, block, profile: normalizeProfile({}), idPrefix: 'w0' }).sessions) {
+      if (s.disc !== 'Run') continue;
+      assert.equal(s.paceZone, ZONE_FOR_LABEL[s.zone], `${block}: ${s.zone}`);
+    }
+  }
+});
+
+test('only running carries a pace band', () => {
+  // These are running paces. A swim marked Z3 is not a threshold run, and
+  // giving it a band would put a running pace on a pool card.
+  const week = generateWeek({ hours: 12, block: 'Build 1', profile: normalizeProfile({}), idPrefix: 'w0' });
+  const others = week.sessions.filter((s) => s.disc !== 'Run');
+  assert.ok(others.length);
+  for (const s of others) assert.equal('paceZone' in s, false, `${s.disc} has no pace band`);
+});
+
+test('a generated session gained a field and lost none', () => {
+  const week = generateWeek({ hours: 8, block: 'Base 2', profile: normalizeProfile({}), idPrefix: 'w0' });
+  const run = week.sessions.find((s) => s.disc === 'Run');
+  const rest = week.sessions.find((s) => s.disc === 'Rest');
+  assert.deepEqual(Object.keys(run).sort(), ['day', 'disc', 'dur', 'focus', 'id', 'paceZone', 'zone']);
+  assert.deepEqual(Object.keys(rest).sort(), ['day', 'disc', 'dur', 'focus', 'id', 'zone']);
 });

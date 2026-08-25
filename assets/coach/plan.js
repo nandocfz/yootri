@@ -18,17 +18,28 @@ import { durToMin, REST_DUR } from './duration.js';
 import { DAYS } from './profile.js';
 import { weeksUntil } from './dates.js';
 import { seedEventsFromProfile } from './events.js';
+import { normalizeBenchmarks } from './paces.js';
 
 const clone = (x) => structuredClone(x);
 const weekKey = (absWeek) => `w${absWeek}`;
 
-/** Bring a stored record up to date and make sure its profile is sane. */
+/** Bring a stored record up to date and make sure its profile is sane.
+
+    Benchmarks are cleaned here too, which is a deliberate difference from
+    `events`: the page normalizes those on its way into `state`, but benchmarks
+    are read straight off the plan by the card renderer *and* by the coach tool.
+    Cleaning them at the one door every reader comes through is what stops those
+    two disagreeing about which result the paces came from. */
 export function loadPlan(raw) {
   const p = migratePlan(raw);
   const profile = normalizeProfile(p.profile);
+  const benchmarks = normalizeBenchmarks(p.benchmarks);
+
   // Avoid handing back a needlessly different object for an already-clean plan,
   // so `loadPlan(loadPlan(x))` stays deep-equal to `loadPlan(x)`.
-  return JSON.stringify(profile) === JSON.stringify(p.profile) ? p : { ...p, profile };
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  if (same(profile, p.profile) && same(benchmarks, p.benchmarks)) return p;
+  return { ...p, profile, benchmarks };
 }
 
 export const weekCount = (plan) => plan.season.length;
@@ -173,7 +184,7 @@ export function refit(plan, { profile, from = 0, to = Infinity, weeks } = {}) {
   return draft;
 }
 
-const SESSION_FIELDS = ['day', 'disc', 'focus', 'dur', 'zone'];
+const SESSION_FIELDS = ['day', 'disc', 'focus', 'dur', 'zone', 'paceZone'];
 const sameSession = (a, b) => SESSION_FIELDS.every((f) => a[f] === b[f]);
 
 /**
@@ -300,10 +311,11 @@ const emptyWeek = (idPrefix) =>
  * @param {string} [opts.raceDate]  sizes the season; falls back to 16 weeks
  * @param {string} [opts.raceType]
  * @param {object} [opts.profile]   inherited availability/constraints/splits
+ * @param {object[]} [opts.benchmarks] inherited running results
  * @param {'fitted'|'empty'} [opts.mode]
  */
 export function newPlan({
-  name, startISO, raceDate = null, raceType, profile, mode = 'fitted', id, now = Date.now(),
+  name, startISO, raceDate = null, raceType, profile, benchmarks, mode = 'fitted', id, now = Date.now(),
 } = {}) {
   // Carry the athlete's own constraints across — their week has not changed
   // just because the race has — but never the previous race.
@@ -335,6 +347,9 @@ export function newPlan({
     // The race the season was built for is also the first thing on the
     // calendar, so there is one place it is recorded rather than two.
     events: seedEventsFromProfile(base, { id: `ev-${now.toString(36)}` }),
+    // Carried across for the same reason the constraints are: the athlete's
+    // 10 km did not get slower because they picked a new race.
+    benchmarks: normalizeBenchmarks(benchmarks),
     done: {},
     actuals: {},
     chat: [],
