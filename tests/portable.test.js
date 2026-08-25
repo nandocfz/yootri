@@ -250,3 +250,47 @@ test('the example plan in the repo is importable', () => {
   assert.equal(res.upgraded, false, 'the shipped example must already be current');
   assert.ok(weekCount(res.plan) > 0);
 });
+
+/* ---- benchmarks -------------------------------------------------------
+
+   Benchmarks ride on the plan as a top-level field with no schema bump, which
+   only works because `migratePlan` passes a v3 record through untouched and the
+   envelope carries whatever the plan carries. These lock that down: it is an
+   easy property to break and an invisible one to lose. */
+
+const withBenchmark = () => ({
+  ...fullPlan(),
+  benchmarks: [{
+    id: 'bm-1', date: '2026-06-15', distanceMeters: 10000, timeSeconds: 2520,
+    source: 'manual', label: 'Sentrumsløpet', current: true,
+  }],
+});
+
+test('a benchmark survives the export/import round trip', () => {
+  const back = readPlanFile(wrote(withBenchmark()));
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.plan.benchmarks.map((b) => b.id), ['bm-1']);
+  assert.equal(back.plan.benchmarks[0].timeSeconds, 2520);
+  assert.equal(back.plan.benchmarks[0].current, true);
+});
+
+test('an imported benchmark survives being adopted under a fresh identity', () => {
+  const back = readPlanFile(wrote(withBenchmark()));
+  const adopted = adoptImported(back.plan, { now: 1737000000000, id: 'p-new' });
+  assert.equal(adopted.id, 'p-new');
+  assert.deepEqual(adopted.benchmarks.map((b) => b.id), ['bm-1']);
+});
+
+test('a plan file carrying a broken benchmark imports without it, not without the plan', () => {
+  const broken = { ...fullPlan(), benchmarks: [{ id: 'x', date: 'never' }, { nope: true }] };
+  const back = readPlanFile(wrote(broken));
+  assert.equal(back.ok, true, 'a bad benchmark is not a bad plan');
+  assert.deepEqual(back.plan.benchmarks, []);
+});
+
+test('a plan file with no benchmarks at all imports with an empty list', () => {
+  const { benchmarks, ...none } = withBenchmark();
+  const back = readPlanFile(wrote(none));
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.plan.benchmarks, []);
+});

@@ -977,6 +977,26 @@
   .diff-issues ul { margin: .3rem 0 0; padding-left: 1.1rem; }
   .diff-issues .err { color: #e08a6c; }
   .diff-empty { font-size: .85rem; color: color-mix(in srgb, var(--color-text) 62%, transparent); }
+  .pnl-h3 { margin: 1.25rem 0 .45rem; font-size: .72rem; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--color-text) 58%, transparent); }
+  .pace-table { width: 100%; border-collapse: collapse; margin-top: .35rem;
+    font-size: .82rem; font-variant-numeric: tabular-nums; }
+  .pace-table th, .pace-table td { text-align: right; padding: .38rem .3rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-text) 11%, transparent); }
+  .pace-table thead th { font-size: .68rem; font-weight: 600; letter-spacing: .05em;
+    text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+  .pace-table th[scope="row"], .pace-table thead th:first-child { text-align: left; font-weight: 500; }
+  .bm-list { list-style: none; margin: .2rem 0 0; padding: 0; font-size: .8rem; }
+  .bm-list li { display: flex; align-items: center; gap: .55rem; padding: .35rem 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-text) 11%, transparent); }
+  .bm-list .bm-what { font-variant-numeric: tabular-nums; }
+  .bm-list .bm-when { margin-right: auto;
+    color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+  .bm-list .bm-tag { font-size: .68rem; letter-spacing: .05em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+  .bm-list .btn { padding: .2rem .55rem; font-size: .74rem; min-height: 0; }
+  .card-meta .pace { font-variant-numeric: tabular-nums; }
   .imp-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: .6rem 1rem; margin: 1rem 0 .8rem; }
   .imp-facts dt { font-size: .74rem; margin-bottom: .1rem;
@@ -1170,6 +1190,7 @@
     </header>
 
     <input type="file" id="import-file" accept="application/json,.json" hidden />
+    <input type="file" id="activity-file" accept=".csv,.tcx,.gpx,text/csv" hidden />
 
     <div class="overview">
       <div class="ov-row">
@@ -1257,6 +1278,7 @@
     <footer class="im-foot">
       <span>yootri is a training planner, not medical advice. Free and open source (MIT).</span>
       <button type="button" class="im-foot-link" id="about-btn">About &amp; disclaimer</button>
+      <button type="button" class="im-foot-link" id="privacy-btn">Privacy notice</button>
     </footer>
 
     <div id="modal-root"></div>
@@ -1301,6 +1323,14 @@
   import { runTurn } from './assets/coach/agent.js';
   import { PROVIDERS, getProvider, resolveModel } from './assets/coach/providers.js';
   import { LEGACY_PHASES } from './assets/coach/migrate.js';
+  import {
+    ZONES, ZONE_FOR_LABEL, normalizeBenchmarks, upsertBenchmark, removeBenchmark,
+    currentBenchmark, paceTableFor, formatPace, vdotFrom,
+  } from './assets/coach/paces.js';
+  import {
+    STANDARD_DISTANCES, readActivitiesCsv, normalizeActivity, benchmarkCandidates, parseClock,
+    trackDistanceMeters, lapTotals,
+  } from './assets/coach/activities.js';
 
   /* =========================================================================
      Data model — static sample plan. Swap this (and the storage layer below)
@@ -1500,6 +1530,7 @@
     state.sessions = sessionsFor(state.week);
     state.view = vw.view === 'month' ? 'month' : 'week';
     state.events = normalizeEvents(plan.events);
+    state.benchmarks = normalizeBenchmarks(plan.benchmarks);
 
     // A plan stored before the calendar existed keeps its race only on the
     // profile. Turning that into the goal event now means the race is recorded
@@ -1526,6 +1557,7 @@
     plan.chartmode = state.chartMode;
     plan.charthidden = state.chartHidden;
     plan.events = state.events;
+    plan.benchmarks = state.benchmarks;
     plan.view = { week: state.week, view: state.view, month: state.month };
     plan.updatedAt = now();
     savePlanLocal(plan);
@@ -1557,6 +1589,7 @@
     timeline: $('phase-timeline'), seasonFill: $('season-fill'), seasonPos: $('season-pos'),
     setupBtn: $('setup-btn'), coachBtn: $('coach-btn'), panelRoot: $('panel-root'),
     aboutBtn: $('about-btn'),
+    privacyBtn: $('privacy-btn'),
     adviceRoot: $('advice-root'), orientRoot: $('orient-root'),
     prevWeek: $('prev-week'), nextWeek: $('next-week'),
     weekPos: $('week-pos'), weekRange: $('week-range'),
@@ -1569,7 +1602,7 @@
     chartScroll: $('chart-scroll'), chartSvg: $('chart-svg'), chartTip: $('chart-tip'),
     chartLegend: $('chart-legend'), modalRoot: $('modal-root'), dialogRoot: $('dialog-root'),
     planTitle: $('plan-title'), planTitleText: $('plan-title-text'), menuRoot: $('menu-root'),
-    importFile: $('import-file'), account: $('account'),
+    importFile: $('import-file'), activityFile: $('activity-file'), account: $('account'),
   };
 
   /* =========================================================================
@@ -1686,6 +1719,27 @@
     return '<span class="card-actual' + cls + '">did ' + esc(fmtTotal(did) || '0m') + rpe + '</span>';
   }
 
+  /* The pace band a Run card should show, resolved at draw time rather than
+     stored on the session.
+
+     Two reasons it is resolved here. A benchmark that changes updates every
+     week at once, past ones included — numbers frozen into a session at
+     generation would be a card quietly asserting last spring's fitness. And a
+     plan stored before any of this existed carries no `paceZone` at all, so the
+     session's own zone label is the fallback and old plans get paces too. */
+  function sessionPaceHTML(s) {
+    if (s.disc !== 'Run') return '';
+
+    const table = paceTableFor(state.benchmarks);
+    if (!table) return '';
+
+    const band = table.zones[s.paceZone || ZONE_FOR_LABEL[s.zone]];
+    if (!band) return '';
+
+    return '<span class="pace" title="From your ' + esc(benchmarkLabel(table.benchmark)) + '">' +
+      formatPace(band.fast) + '–' + formatPace(band.slow) + ' /km</span>';
+  }
+
   function sessionCardHTML(s) {
     const meta = DISC[s.disc] || {};
     const color = meta.color || 'var(--color-neutral-500)';
@@ -1706,6 +1760,7 @@
         '<div class="card-meta">' +
           '<span><i class="ph ph-clock"></i>' + esc(s.dur) + '</span>' +
           (zone ? '<span><i class="ph ph-gauge"></i>' + esc(zone) + '</span>' : '') +
+          sessionPaceHTML(s) +
         '</div>' +
         actualLineHTML(s) +
         (s.desc && s.desc.trim() ? '<div class="card-desc">' + esc(s.desc) + '</div>' : '') +
@@ -2776,9 +2831,48 @@
     ['No warranty as to results.',
       'yootri makes no guarantee of fitness improvement, race outcome, or any other result. The software is provided "as is" under the MIT licence, without warranty of any kind.'],
     ['Your data.',
-      'Everything you enter is stored in your own browser. If you choose to sign in, your plans sync to Google Cloud Firestore under your own account and are readable only by you. Your API key is stored in this browser only and is never synced or exported. Coach conversations are never synced.'],
+      'Everything you enter is stored in your own browser. If you choose to sign in, your plans sync to Google Cloud Firestore under your own account and are readable only by you. Your API key is stored in this browser only and is never synced or exported. Coach conversations are never synced. The privacy notice, linked from the footer, sets out exactly what is held and how to have it deleted.'],
     ['Nothing here excludes or limits liability where the law does not allow it,',
       'including liability for death or personal injury.'],
+  ];
+
+  /* ---- Privacy notice ----
+
+     Cloud sync makes this project the controller of somebody else's training
+     data, and a notice is what the law requires in return. It is kept in the
+     same shape as the disclaimer above — a data array, rendered in a panel a
+     user can actually reach — rather than a linked PDF nobody opens.
+
+     Two values below cannot be derived from anything else in the repo: the
+     contact route, because a notice without a working one is not a notice, and
+     the Firestore region, because the client config does not say where the data
+     actually sits. They are filled in for this deployment; a fork has to set
+     its own. Either left blank renders a loud marker in the notice and fails
+     `tests/index-html.test.js`, so neither can be published by forgetting. */
+
+  const PRIVACY_CONTACT = 'gzarruk@gmail.com';
+  const PRIVACY_REGION = 'eur3 (Europe)';
+  const PRIVACY_VERSION = '2026-08-23';
+
+  const mustSet = (v, name) => v || '\u26a0 SET ' + name + ' BEFORE PUBLISHING';
+
+  const PRIVACY_SECTIONS = () => [
+    ['Who is responsible.',
+      'Gustavo Zarruk, Norway, sole developer of yootri. For any question or request about your data, write to ' + mustSet(PRIVACY_CONTACT, 'PRIVACY_CONTACT') + '.'],
+    ['Signed out, nothing is collected.',
+      'yootri stores your plans in this browser and works fully without an account. Everything below applies only if you choose to sign in.'],
+    ['What is stored if you sign in.',
+      'From Google: an account identifier, your email address and your display name. From yootri: your plans — the schedule, your profile settings, which sessions you marked done, and what you logged against them, including any note you typed. It is held in Google Cloud Firestore, in ' + mustSet(PRIVACY_REGION, 'PRIVACY_REGION') + '. Google acts as the processor.'],
+    ['What never leaves this browser, signed in or not.',
+      'Your AI provider API key, and every coach conversation. These are stripped before anything is sent and are not in an export either.'],
+    ['What it is used for.',
+      'Making your plans available on your other devices. That is the only purpose. There is no analytics, no tracking, no advertising, and your data is never shared or sold.'],
+    ['The basis for it.',
+      'Your consent, asked for separately the first time you sign in, and withdrawable at any time without losing anything stored in this browser.'],
+    ['How long it is kept.',
+      'Until you delete it. Deleting your cloud data removes both the plans and the account record, and takes effect immediately.'],
+    ['Not intended for children.',
+      'yootri is not directed at children under 16 and should not be used by them without a parent or guardian.'],
   ];
 
   /* Shown once, on a browser that has never run yootri before. It is an
@@ -2850,6 +2944,123 @@
       'About and disclaimer',
     );
     $('ab-close').addEventListener('click', closePanel);
+  }
+
+  /* ---- Sync consent ----
+
+     Signing in is not consent. The account exists so that plans can sync, and
+     agreeing to that is a separate, affirmative act which has to be as easy to
+     take back as it was to give.
+
+     Nothing is read from or written to the cloud until `hasSyncConsent()` is
+     true. The guards sit on each call site rather than in one wrapper, so a new
+     path cannot bypass the question by forgetting to route through it.
+
+     The version is the notice's date. Change the notice materially, change the
+     version, and everyone is asked again rather than being held to a document
+     they never saw. */
+
+  const SYNC_CONSENT_KEY = 'yootri_sync_consent_v1';
+
+  function syncConsent() {
+    try { return JSON.parse(localStorage.getItem(SYNC_CONSENT_KEY) || 'null'); }
+    catch (e) { return null; }
+  }
+  const hasSyncConsent = () => syncConsent()?.version === PRIVACY_VERSION;
+  function recordSyncConsent() {
+    try {
+      localStorage.setItem(SYNC_CONSENT_KEY, JSON.stringify({
+        version: PRIVACY_VERSION, at: new Date().toISOString(),
+      }));
+    } catch (e) {}
+  }
+  function forgetSyncConsent() {
+    try { localStorage.removeItem(SYNC_CONSENT_KEY); } catch (e) {}
+  }
+
+  function openSyncConsentPanel() {
+    panelShell(
+      '<h2>Turn on sync?</h2>' +
+      '<p class="pnl-sub">You are signed in. Nothing has been sent yet.</p>' +
+      '<div class="legal">' +
+        '<p>Turning sync on copies your plans — the schedule, your profile, what you marked done and what you logged — to Google Cloud Firestore, so they follow you to your other devices. Your Google email address and display name are stored alongside them.</p>' +
+        '<p><b>Your API key and your coach conversations are never sent</b>, signed in or not.</p>' +
+        '<p>You can turn this off and delete everything at any time, from the privacy notice in the footer. Either way your plans stay in this browser.</p>' +
+      '</div>' +
+      '<div class="pnl-act">' +
+        '<button type="button" class="btn btn-ghost" id="sc-no">No thanks</button>' +
+        '<button type="button" class="btn btn-primary" id="sc-yes">Turn on sync</button>' +
+      '</div>',
+      'Turn on sync',
+    );
+    $('sc-yes').addEventListener('click', async () => {
+      recordSyncConsent();
+      closePanel();
+      renderAccount();
+      await pullFromCloud();
+    });
+    $('sc-no').addEventListener('click', async () => {
+      closePanel();
+      setStatus('Signing out…');
+      // Declining should leave nothing behind. No plan has been written yet, but
+      // signing in created an account record, and that is the half that
+      // identifies them — so it goes rather than merely being signed out of.
+      try { await window.imCloud.eraseEverything(); }
+      catch (e) {
+        console.error(e);
+        try { await window.imCloud.signOut(); } catch (e2) { console.error(e2); }
+      }
+    });
+  }
+
+  function openPrivacyPanel() {
+    const signedIn = !!authUser;
+    panelShell(
+      '<h2>Privacy notice</h2>' +
+      '<p class="pnl-sub">Version ' + esc(PRIVACY_VERSION) + ' — what yootri holds if you sign in, and how to get rid of it.</p>' +
+      '<div class="legal">' +
+        PRIVACY_SECTIONS().map(([head, body]) =>
+          '<p><b>' + esc(head) + '</b> ' + esc(body) + '</p>').join('') +
+      '</div>' +
+      '<div class="pnl-sec">' +
+        '<p class="legal-about"><b>Your rights.</b> You can ask for a copy of your data, correct it, have it deleted, or withdraw your consent. ' +
+          'A copy needs no asking — <b>Plan menu → Export this plan</b> writes out everything yootri holds about a plan. ' +
+          'Corrections you make by editing the plan. Deletion is the button below. ' +
+          'If you believe your data has been mishandled you can complain to ' +
+          '<a href="https://www.datatilsynet.no/" target="_blank" rel="noopener">Datatilsynet</a>.</p>' +
+        (signedIn
+          ? '<p class="legal-about">You are signed in as ' + esc(authUser.email || 'your account') + '.</p>'
+          : '<p class="legal-about">You are not signed in, so there is nothing held outside this browser to delete.</p>') +
+      '</div>' +
+      '<div class="pnl-act">' +
+        (signedIn ? '<button type="button" class="btn btn-ghost danger" id="pv-erase">Delete my cloud data</button>' : '') +
+        '<button type="button" class="btn btn-primary" id="pv-close">Close</button>' +
+      '</div>',
+      'Privacy notice',
+    );
+    $('pv-close').addEventListener('click', closePanel);
+    if (signedIn) $('pv-erase').addEventListener('click', eraseCloudData);
+  }
+
+  async function eraseCloudData() {
+    const ok = await confirmDialog(
+      'Delete your cloud data?',
+      'This removes every plan yootri has stored for your account, and the account record itself — your email address and name. It cannot be undone. Your plans stay in this browser, and yootri keeps working signed out.',
+      'Delete everything',
+    );
+    if (!ok) return;
+    setStatus('Deleting…');
+    try {
+      await window.imCloud.eraseEverything();
+      forgetSyncConsent();
+      closePanel();
+      setStatus('Cloud data deleted — saved on this device');
+    } catch (e) {
+      // Plans are deleted before the account, so a failure here can leave the
+      // account record behind. Say that rather than implying nothing happened.
+      console.error(e);
+      setStatus('Deletion did not finish — sign in again and retry', true);
+    }
   }
 
   const SPREAD_LABELS = {
@@ -3232,18 +3443,18 @@
   const cloudReady = () => !!(window.imCloud && window.imCloud.configured);
 
   function schedulePush() {
-    if (!cloudReady() || !authUser) return;
+    if (!cloudReady() || !authUser || !hasSyncConsent()) return;
     setStatus('Saving…');
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => pushPlan(plan), 900);
   }
   async function pushPlan(p) {
-    if (!cloudReady() || !authUser) return;
+    if (!cloudReady() || !authUser || !hasSyncConsent()) return;
     try { await window.imCloud.savePlan(p); setStatus('Synced ' + timeStr()); }
     catch (e) { console.error(e); setStatus('Sync failed — saved locally', true); }
   }
   async function cloudDelete(id) {
-    if (!cloudReady() || !authUser) return;
+    if (!cloudReady() || !authUser || !hasSyncConsent()) return;
     try { await window.imCloud.deletePlan(id); } catch (e) { console.error(e); }
   }
 
@@ -3293,8 +3504,12 @@
   async function onAuth(user) {
     authUser = user;
     renderAccount();
-    if (user) await pullFromCloud();
-    else setStatus('Saved on this device');
+    if (!user) { setStatus('Saved on this device'); return; }
+    // The pull is gated too, not just the push. Reading somebody's plans back
+    // out is processing as much as writing them, and at this point they have
+    // agreed to neither.
+    if (!hasSyncConsent()) { openSyncConsentPanel(); return; }
+    await pullFromCloud();
   }
 
   function bindCloud() {
@@ -3459,6 +3674,15 @@
     reader.readAsText(file);
   }
 
+  /* An activity export, read entirely in this browser. Nothing is uploaded and
+     nothing but the one result the athlete picks is ever stored. */
+  function importActivityFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => loadActivityFile(String(reader.result || ''), file.name);
+    reader.onerror = () => failPaces('That file could not be read from disk.');
+    reader.readAsText(file);
+  }
+
   async function importExample() {
     try {
       const r = await fetch('assets/example-plan.json', { cache: 'no-store' });
@@ -3577,6 +3801,577 @@
     setStatus('Imported "' + p.name + '" · ' + weekCount(p) + ' weeks');
   }
 
+  /* ---- Training paces ----------------------------------------------------
+
+     Every pace in this app comes from one running result the athlete entered,
+     or picked out of an export they downloaded themselves. yootri measures
+     nothing: what follows is arithmetic on a time they gave it.
+
+     A benchmark changes no session, so it is written straight away rather than
+     through the draft-diff-apply ceremony — the same call the calendar makes
+     for an event that is not the goal event. There would be nothing in a diff
+     to approve: what changes is which numbers the Run cards resolve to. */
+
+  /* Transient panel state: what the last file produced, and how it was read.
+     Lives outside the panel because reopening it after picking a candidate must
+     not lose the list. */
+  let pacesView = null;
+
+  function fmtDistance(meters) {
+    const std = STANDARD_DISTANCES.find((d) => Math.abs(meters - d.meters) / d.meters <= 0.005);
+    if (std) return std.label;
+    return String(Number((meters / 1000).toFixed(2))) + ' km';
+  }
+
+  function fmtClock(seconds) {
+    const t = Math.round(seconds);
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const sec = String(t % 60).padStart(2, '0');
+    return h ? h + ':' + String(m).padStart(2, '0') + ':' + sec : m + ':' + sec;
+  }
+
+  function benchmarkLabel(b) {
+    return b ? fmtDistance(b.distanceMeters) + ' in ' + fmtClock(b.timeSeconds) : '';
+  }
+
+  function paceTableHTML(table) {
+    return '<table class="pace-table"><thead><tr>' +
+        '<th scope="col">Pace band</th><th scope="col">min/km</th><th scope="col">min/mile</th>' +
+      '</tr></thead><tbody>' +
+      ZONES.map((z) => {
+        const band = table.zones[z.key];
+        return '<tr><th scope="row">' + esc(z.label) + '</th>' +
+          '<td>' + formatPace(band.fast) + '&ndash;' + formatPace(band.slow) + '</td>' +
+          '<td>' + formatPace(band.fast, 'mi') + '&ndash;' + formatPace(band.slow, 'mi') + '</td></tr>';
+      }).join('') +
+      '</tbody></table>';
+  }
+
+  function keptListHTML() {
+    const kept = state.benchmarks.slice().reverse();
+    if (!kept.length) return '';
+    return '<h3 class="pnl-h3">Results you have kept</h3>' +
+      '<ul class="bm-list">' + kept.map((b) =>
+        '<li>' +
+          '<span class="bm-what">' + esc(benchmarkLabel(b)) + '</span>' +
+          '<span class="bm-when">' + esc(fmtLongDate(b.date)) + '</span>' +
+          (b.current
+            ? '<span class="bm-tag">in use</span>'
+            : '<button type="button" class="btn btn-ghost" data-bm-use="' + esc(b.id) + '">Use this</button>') +
+          '<button type="button" class="icon-btn del" data-bm-del="' + esc(b.id) + '" ' +
+            'title="Remove this result" aria-label="Remove this result"><i class="ph ph-trash"></i></button>' +
+        '</li>').join('') + '</ul>';
+  }
+
+  function openPacesPanel() {
+    const table = paceTableFor(state.benchmarks);
+    const error = pacesView && pacesView.error ? pacesView.error : '';
+
+    const distanceOpts = STANDARD_DISTANCES
+      .map((d) => '<option value="' + d.meters + '">' + esc(d.label) + '</option>').join('') +
+      '<option value="other">Another distance</option>';
+
+    panelShell(
+      '<h2>Training paces</h2>' +
+      '<p class="pnl-sub">Worked out from a running result you enter — a race, or a time trial you ran flat ' +
+        'out. yootri measures nothing itself, so when that result stops being you, replace it and every week ' +
+        'of the season picks up the new one at once.</p>' +
+
+      (table
+        ? '<dl class="imp-facts">' +
+            '<div><dt>From</dt><dd>' + esc(benchmarkLabel(table.benchmark)) + '</dd></div>' +
+            '<div><dt>Run on</dt><dd>' + esc(fmtLongDate(table.benchmark.date)) + '</dd></div>' +
+            '<div><dt>VDOT</dt><dd>' + table.vdot.toFixed(1) + '</dd></div>' +
+          '</dl>' +
+          paceTableHTML(table)
+        : '<p class="pnl-hint">No result yet, so a Run card shows its zone but no pace. Add one below.</p>') +
+
+      (error ? '<div class="diff-issues"><b class="err">' + esc(error) + '</b></div>' : '') +
+
+      '<h3 class="pnl-h3">Add a result</h3>' +
+      '<div class="pnl-grid">' +
+        field('Distance', '<select class="input" id="bm-dist">' + distanceOpts + '</select>') +
+        field('Kilometres', '<input type="number" class="input" id="bm-km" min="0.4" max="200" step="0.01" value="10" />') +
+        field('Time', '<input type="text" class="input" id="bm-time" placeholder="42:00" />') +
+        field('Date', '<input type="date" class="input" id="bm-date" value="' + esc(toISO(new Date())) + '" />') +
+      '</div>' +
+      '<p class="pnl-hint">Time as <b>42:00</b>, or <b>1:32:10</b> for anything over an hour.</p>' +
+
+      keptListHTML() +
+
+      '<div class="pnl-act">' +
+        '<button type="button" class="btn btn-ghost spacer" id="bm-file">Import from a file…</button>' +
+        (stravaConfig()
+          ? '<button type="button" class="btn btn-secondary" id="bm-strava">' +
+            (stravaConnected() ? 'Read from Strava' : 'Connect Strava') + '</button>'
+          : '') +
+        '<button type="button" class="btn btn-ghost" id="bm-close">Close</button>' +
+        '<button type="button" class="btn btn-primary" id="bm-add">Use this result</button>' +
+      '</div>',
+      'Training paces',
+    );
+
+    // "Another distance" is the only case that needs the kilometres box; for the
+    // rest the select already said, and two ways to say one thing invites them
+    // to disagree.
+    const dist = $('bm-dist');
+    const kmField = $('bm-km').closest('.pnl-f');
+    const syncDist = () => {
+      const other = dist.value === 'other';
+      kmField.classList.toggle('hidden', !other);
+      if (!other) $('bm-km').value = String(Number(dist.value) / 1000);
+    };
+    dist.value = String(10000);
+    syncDist();
+    dist.addEventListener('change', syncDist);
+
+    $('bm-close').addEventListener('click', closePanel);
+    $('bm-file').addEventListener('click', () => els.activityFile.click());
+    $('bm-add').addEventListener('click', addTypedBenchmark);
+    const strava = $('bm-strava');
+    if (strava) strava.addEventListener('click', () => (stravaConnected() ? loadFromStrava() : startStravaConnect()));
+
+    els.panelRoot.querySelectorAll('[data-bm-use]').forEach((b) => {
+      b.addEventListener('click', () => useBenchmark(b.getAttribute('data-bm-use')));
+    });
+    els.panelRoot.querySelectorAll('[data-bm-del]').forEach((b) => {
+      b.addEventListener('click', () => dropBenchmark(b.getAttribute('data-bm-del')));
+    });
+  }
+
+  /** Write a benchmark list, redraw everything that shows a pace, reopen. */
+  function commitBenchmarks(next, status) {
+    state.benchmarks = next;
+    persistPlan();
+    renderAll();
+    if (status) setStatus(status);
+    openPacesPanel();
+  }
+
+  function useBenchmark(id) {
+    const found = state.benchmarks.find((b) => b.id === id);
+    if (!found) return;
+    pacesView = null;
+    commitBenchmarks(upsertBenchmark(state.benchmarks, { ...found, current: true }),
+      'Paces now from your ' + benchmarkLabel(found));
+  }
+
+  function dropBenchmark(id) {
+    pacesView = null;
+    commitBenchmarks(removeBenchmark(state.benchmarks, id));
+  }
+
+  function addTypedBenchmark() {
+    const distanceMeters = $('bm-dist').value === 'other'
+      ? Number($('bm-km').value) * 1000
+      : Number($('bm-dist').value);
+    const timeSeconds = parseClock($('bm-time').value);
+    const date = $('bm-date').value;
+
+    // Say which of the three is wrong. "Invalid" sends somebody back to stare
+    // at three boxes, only one of which they got wrong.
+    if (!(distanceMeters > 0)) return failPaces('That distance is not a distance yootri can use.');
+    if (timeSeconds === null || timeSeconds <= 0) {
+      return failPaces('That time could not be read. Write it as 42:00, or 1:32:10 for over an hour.');
+    }
+    if (!parseISO(date)) return failPaces('That result needs a date, so it can be told apart from a later one.');
+    if (vdotFrom({ distanceMeters, timeSeconds }) === null) {
+      return failPaces('That distance and time work out faster than anybody has run. Check which box each went in.');
+    }
+
+    pacesView = null;
+    commitBenchmarks(
+      upsertBenchmark(state.benchmarks, {
+        id: 'bm-' + uid4(), date, distanceMeters, timeSeconds, source: 'manual', current: true,
+      }),
+      'Paces now from your ' + fmtDistance(distanceMeters) + ' in ' + fmtClock(timeSeconds),
+    );
+  }
+
+  function failPaces(reason) {
+    pacesView = { ...(pacesView || {}), error: reason };
+    openPacesPanel();
+  }
+
+  /* ---- reading an activity file -----------------------------------------
+
+     The CSV reader lives in activities.js and is unit-tested. TCX and GPX are
+     XML, and `DOMParser` is a browser thing an engine module may not touch, so
+     they are read here — and then handed straight back through the same
+     `normalizeActivity`, so there is one definition of a clean activity. */
+
+  function readTcx(doc, title) {
+    const lapEls = Array.from(doc.getElementsByTagName('Lap'));
+    if (!lapEls.length) return null;
+
+    // A Lap's own DistanceMeters and TotalTimeSeconds precede its Track in the
+    // schema, so the first of each under the lap is the lap's, not a
+    // trackpoint's running total.
+    const first = (lap, tag) => {
+      const el = lap.getElementsByTagName(tag)[0];
+      return el ? Number(el.textContent) : null;
+    };
+    const totals = lapTotals(lapEls.map((lap) => ({
+      distanceMeters: first(lap, 'DistanceMeters'),
+      timeSeconds: first(lap, 'TotalTimeSeconds'),
+    })));
+
+    const id = doc.getElementsByTagName('Id')[0];
+    const activity = doc.getElementsByTagName('Activity')[0];
+    return normalizeActivity({
+      date: String(id ? id.textContent : '').slice(0, 10),
+      distanceMeters: totals.distanceMeters,
+      timeSeconds: totals.timeSeconds,
+      type: (activity && activity.getAttribute('Sport')) || 'Running',
+      title,
+    });
+  }
+
+  function readGpx(doc, title) {
+    const pts = Array.from(doc.getElementsByTagName('trkpt'));
+    if (pts.length < 2) return null;
+
+    // A GPX track carries no distance, only where you were, so it has to be
+    // measured — by activities.js, which is where that arithmetic is tested.
+    const meters = trackDistanceMeters(pts.map((pt) => ({
+      lat: pt.getAttribute('lat'),
+      lon: pt.getAttribute('lon'),
+    })));
+
+    const stamps = pts
+      .map((pt) => pt.getElementsByTagName('time')[0])
+      .filter(Boolean)
+      .map((t) => Date.parse(t.textContent))
+      .filter(Number.isFinite);
+    if (stamps.length < 2) return null;
+
+    return normalizeActivity({
+      date: toISO(new Date(stamps[0])),
+      distanceMeters: meters,
+      timeSeconds: (stamps[stamps.length - 1] - stamps[0]) / 1000,
+      type: 'Running',
+      title,
+    });
+  }
+
+  function readActivityXml(text, title) {
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(text, 'application/xml');
+    } catch (e) {
+      return null;
+    }
+    if (!doc || doc.getElementsByTagName('parsererror').length) return null;
+    return readTcx(doc, title) || readGpx(doc, title);
+  }
+
+  /** What a file produced, as candidates to choose between. */
+  function loadActivityFile(text, name) {
+    const isCsv = /\.csv$/i.test(name);
+
+    if (isCsv) {
+      const unit = (pacesView && pacesView.unit) || 'km';
+      const res = readActivitiesCsv(text, { unit });
+      if (!res.ok) {
+        pacesView = null;
+        return failPaces(res.reason);
+      }
+      const candidates = benchmarkCandidates(res.activities, { today: toISO(new Date()) });
+      pacesView = { candidates, unit, name, text, scanned: res.activities.length, error: '' };
+      return openCandidatesPanel();
+    }
+
+    const one = readActivityXml(text, name.replace(/\.[a-z]+$/i, ''));
+    if (!one) {
+      pacesView = null;
+      return failPaces('That file could not be read as a TCX or GPX activity. ' +
+        'Garmin Connect writes both from an activity’s export menu.');
+    }
+    if (vdotFrom(one) === null) {
+      pacesView = null;
+      return failPaces('That activity works out faster than anybody has run, so its trace is broken rather ' +
+        'than its athlete remarkable.');
+    }
+
+    // A single file is one the athlete chose deliberately, so it is offered
+    // whatever distance it turned out to be — unlike a whole season's CSV,
+    // where only the standard distances are worth putting in front of them.
+    pacesView = {
+      candidates: [{
+        date: one.date,
+        distanceMeters: one.distanceMeters,
+        timeSeconds: one.timeSeconds,
+        label: one.title,
+        standard: null,
+        source: 'file',
+        vdot: vdotFrom(one),
+      }],
+      unit: 'km', name, text, scanned: 1, error: '',
+    };
+    return openCandidatesPanel();
+  }
+
+  function openCandidatesPanel() {
+    const v = pacesView || { candidates: [], scanned: 0, name: '', unit: 'km' };
+    const isCsv = /\.csv$/i.test(v.name || '');
+
+    const rows = v.candidates.map((c, i) =>
+      '<li>' +
+        '<span class="bm-what">' + esc(fmtDistance(c.distanceMeters) + ' in ' + fmtClock(c.timeSeconds)) + '</span>' +
+        '<span class="bm-when">' + esc(fmtLongDate(c.date)) + '</span>' +
+        '<span class="bm-tag">VDOT ' + c.vdot.toFixed(1) + '</span>' +
+        '<button type="button" class="btn btn-ghost" data-bm-pick="' + i + '">Use this</button>' +
+      '</li>').join('');
+
+    panelShell(
+      '<h2>From ' + esc(v.name || 'your file') + '</h2>' +
+      '<p class="pnl-sub">' +
+        (v.candidates.length
+          ? 'Your best effort at each standard distance. Pick the one that is you now — an older result and a ' +
+            'faster one are different claims, and only you know which holds.'
+          : 'Nothing in that file was a run at a standard distance inside the last year.') +
+      '</p>' +
+      '<p class="pnl-hint">' + v.scanned + ' run' + (v.scanned === 1 ? '' : 's') +
+        ' read. Nothing from this file is stored — only the one result you pick, and only its distance, ' +
+        'time and date.</p>' +
+
+      (rows ? '<ul class="bm-list">' + rows + '</ul>' : '') +
+
+      (isCsv
+        ? '<h3 class="pnl-h3">Units</h3>' +
+          '<p class="pnl-hint">Garmin writes your account’s own unit and does not record which it used. ' +
+            'If these distances look wrong by a factor of about 1.6, it is this.</p>' +
+          '<div class="pnl-grid">' +
+            field('This file is in', '<select class="input" id="bm-unit">' +
+              '<option value="km"' + (v.unit === 'km' ? ' selected' : '') + '>Kilometres</option>' +
+              '<option value="mi"' + (v.unit === 'mi' ? ' selected' : '') + '>Miles</option>' +
+            '</select>') +
+          '</div>'
+        : '') +
+
+      '<div class="pnl-act">' +
+        '<button type="button" class="btn btn-ghost spacer" id="bm-back">Back</button>' +
+        '<button type="button" class="btn btn-ghost" id="bm-close">Close</button>' +
+        (v.from === 'strava'
+          ? '<button type="button" class="btn btn-secondary" id="bm-restrava">Read from Strava again</button>'
+          : '<button type="button" class="btn btn-secondary" id="bm-refile">Choose another file…</button>') +
+      '</div>',
+      'Choose a result',
+    );
+
+    $('bm-back').addEventListener('click', () => { pacesView = null; openPacesPanel(); });
+    $('bm-close').addEventListener('click', closePanel);
+    const refile = $('bm-refile');
+    if (refile) refile.addEventListener('click', () => els.activityFile.click());
+    const restrava = $('bm-restrava');
+    if (restrava) restrava.addEventListener('click', loadFromStrava);
+
+    const unit = $('bm-unit');
+    if (unit) {
+      unit.addEventListener('change', () => {
+        // Re-read rather than convert: the parse is where the unit is applied,
+        // and converting the results instead would leave the skipped-row count
+        // and the distance matching describing the other unit's numbers.
+        pacesView = { ...pacesView, unit: unit.value };
+        if (pacesView.text) loadActivityFile(pacesView.text, pacesView.name);
+      });
+    }
+
+    els.panelRoot.querySelectorAll('[data-bm-pick]').forEach((btn) => btn.addEventListener('click', () => {
+      const c = v.candidates[Number(btn.getAttribute('data-bm-pick'))];
+      if (!c) return;
+      pacesView = null;
+      commitBenchmarks(
+        upsertBenchmark(state.benchmarks, {
+          id: 'bm-' + uid4(),
+          date: c.date,
+          distanceMeters: c.distanceMeters,
+          timeSeconds: c.timeSeconds,
+          label: c.label,
+          source: 'file',
+          current: true,
+        }),
+        'Paces now from your ' + fmtDistance(c.distanceMeters) + ' in ' + fmtClock(c.timeSeconds),
+      );
+    }));
+  }
+
+  /* ---- Strava, off unless this browser was told about it ------------------
+
+     There is no button for this in the app as published, and that is the
+     point. The client id and the relay URL live in this browser's own storage,
+     beside the model API key — never in the repository, which GitHub Pages
+     serves wholesale. With no way for a visitor to start the flow, no third
+     party's data can reach the relay, so yootri stays a thing that holds
+     nobody's data but its own athlete's.
+
+     Strava's API answers a browser directly: measured from a page served at
+     http://localhost:8000, both /api/v3/athlete and /oauth/token replied with
+     a body readable from script rather than being blocked before a response
+     existed. So the Worker in tools/strava-relay is not a proxy — it exists
+     only because `client_secret` cannot be published and Strava offers no
+     PKCE. Everything below except the token exchange talks to Strava directly.
+
+     See tools/strava-relay/README.md for the whole of it, including why this
+     is capped at ten athletes and so is a personal convenience rather than a
+     feature. */
+
+  const STRAVA_CONFIG_KEY = 'yootri_strava';
+  const STRAVA_TOKEN_KEY = 'yootri_strava_token';
+
+  /* The least scope Strava offers that still returns activities. */
+  const STRAVA_SCOPE = 'activity:read';
+
+  const readJson = (key) => {
+    try {
+      return JSON.parse(localStorage.getItem(key) || 'null');
+    } catch (e) {
+      return null;
+    }
+  };
+
+  function stravaConfig() {
+    const cfg = readJson(STRAVA_CONFIG_KEY);
+    return cfg && cfg.clientId && cfg.relayUrl ? cfg : null;
+  }
+
+  const stravaConnected = () => !!(readJson(STRAVA_TOKEN_KEY) || {}).refresh_token;
+
+  /* Where Strava sends the athlete back: this page, with nothing else on it.
+     Query and hash are dropped so a plan file dialog or a stale code cannot
+     ride along. */
+  const stravaRedirectUri = () => location.origin + location.pathname;
+
+  function startStravaConnect() {
+    const cfg = stravaConfig();
+    if (!cfg) return;
+    const url = new URL('https://www.strava.com/oauth/authorize');
+    url.searchParams.set('client_id', cfg.clientId);
+    url.searchParams.set('redirect_uri', stravaRedirectUri());
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('approval_prompt', 'auto');
+    url.searchParams.set('scope', STRAVA_SCOPE);
+    location.assign(url.toString());
+  }
+
+  /** Exchange or refresh, via the relay. The only request that does not go
+      straight to Strava, because it is the only one needing the secret. */
+  async function stravaExchange(payload) {
+    const cfg = stravaConfig();
+    if (!cfg) throw new Error('Strava is not set up in this browser.');
+
+    let res;
+    try {
+      res = await fetch(cfg.relayUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      throw new Error('The Strava relay could not be reached. Check it is deployed and that this origin ' +
+        'is in its ALLOWED_ORIGINS.');
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.access_token) {
+      throw new Error(data.error || 'Strava would not complete the connection.');
+    }
+    localStorage.setItem(STRAVA_TOKEN_KEY, JSON.stringify(data));
+    return data;
+  }
+
+  /** A usable access token, refreshing a minute early rather than on failure. */
+  async function stravaAccessToken() {
+    const tok = readJson(STRAVA_TOKEN_KEY);
+    if (!tok || !tok.refresh_token) return null;
+    if (tok.access_token && tok.expires_at && tok.expires_at * 1000 > Date.now() + 60000) {
+      return tok.access_token;
+    }
+    return (await stravaExchange({ refresh_token: tok.refresh_token })).access_token;
+  }
+
+  /* One page of activities is 200, and five pages is a year of running for
+     anybody. The count read is shown to the athlete, so a cap that ever bit
+     would be visible rather than silent. */
+  const STRAVA_PAGE = 200;
+  const STRAVA_MAX_PAGES = 5;
+
+  async function stravaRuns(token, days) {
+    const after = Math.floor((Date.now() - days * 86400000) / 1000);
+    const runs = [];
+
+    for (let page = 1; page <= STRAVA_MAX_PAGES; page++) {
+      const url = 'https://www.strava.com/api/v3/athlete/activities' +
+        '?per_page=' + STRAVA_PAGE + '&after=' + after + '&page=' + page;
+
+      const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+      if (res.status === 401) {
+        localStorage.removeItem(STRAVA_TOKEN_KEY);
+        throw new Error('Strava no longer accepts that connection. Connect again.');
+      }
+      if (res.status === 429) throw new Error('Strava is rate-limiting this app. Try again in fifteen minutes.');
+      if (!res.ok) throw new Error('Strava would not list your activities (' + res.status + ').');
+
+      const batch = await res.json().catch(() => null);
+      if (!Array.isArray(batch) || !batch.length) break;
+
+      for (const a of batch) {
+        // Five fields, and no others. Strava sends heart rate on every
+        // activity; nothing here reads it, for the same reason the Garmin CSV
+        // reader steps past those columns — everything on a plan but the
+        // conversation syncs, so a heart-rate field here would be one sync from
+        // being stored.
+        const one = normalizeActivity({
+          date: String(a.start_date_local || a.start_date || '').slice(0, 10),
+          distanceMeters: a.distance,
+          timeSeconds: a.elapsed_time,
+          type: a.sport_type || a.type || '',
+          title: a.name || '',
+        });
+        if (one) runs.push(one);
+      }
+
+      if (batch.length < STRAVA_PAGE) break;
+    }
+
+    return runs;
+  }
+
+  async function loadFromStrava() {
+    setStatus('Reading your runs from Strava…');
+    try {
+      const token = await stravaAccessToken();
+      if (!token) return startStravaConnect();
+
+      const runs = await stravaRuns(token, 365);
+      const candidates = benchmarkCandidates(runs, { today: toISO(new Date()) });
+      pacesView = { candidates, unit: 'km', name: 'Strava', scanned: runs.length, error: '', from: 'strava' };
+      setStatus('');
+      openCandidatesPanel();
+    } catch (e) {
+      setStatus('');
+      failPaces(e.message);
+    }
+  }
+
+  /** Finish a connection the athlete started before Strava redirected them. */
+  async function resumeStravaConnect() {
+    const code = new URLSearchParams(location.search).get('code');
+    if (!code || !stravaConfig()) return;
+
+    // Take the code out of the address bar first, whatever happens next: it is
+    // single-use, and leaving it there means a reload tries to spend it twice.
+    history.replaceState(null, '', stravaRedirectUri());
+
+    try {
+      await stravaExchange({ code });
+      await loadFromStrava();
+    } catch (e) {
+      failPaces(e.message);
+    }
+  }
+
   /* ---- Small dialogs (name entry / confirm) reusing the modal styles ---- */
 
   function nameDialog(title, initial, okLabel) {
@@ -3642,6 +4437,15 @@
         'title="Sign-in is unavailable here — your plans are saved in this browser">' +
         '<i class="ph ph-hard-drives"></i> Local only</button>';
       $('local-only').addEventListener('click', openLocalOnlyPanel);
+    } else if (authUser && !hasSyncConsent()) {
+      // Signed in, nothing agreed to, nothing sent. Dismissing the consent panel
+      // lands here rather than in a state with no way back to the question.
+      els.account.innerHTML =
+        '<button type="button" class="account-note" id="sync-off" ' +
+        'title="Signed in, but sync is off — your plans are saved in this browser">' +
+        '<i class="ph ph-cloud-slash"></i> Sync off</button>' +
+        '<button type="button" class="btn btn-ghost" data-acct="signout">Sign out</button>';
+      $('sync-off').addEventListener('click', openSyncConsentPanel);
     } else if (authUser) {
       els.account.innerHTML =
         '<span class="account-email"><i class="ph ph-cloud-check"></i>' + esc(authUser.email || 'Signed in') + '</span>' +
@@ -3681,6 +4485,7 @@
         menuRow('rename', 'pencil-simple', 'Rename') +
         menuRow('dup', 'copy', 'Duplicate') +
         menuRow('export', 'download-simple', 'Export this plan') +
+        menuRow('paces', 'gauge', 'Training paces…') +
         '<button type="button" role="menuitem" class="pmenu-item danger" data-pm="delete"' +
           (soleplan ? ' aria-disabled="true"' : '') + '>' +
           '<i class="ph ph-trash" aria-hidden="true"></i><span class="pmenu-label">Delete plan</span></button>' +
@@ -3730,6 +4535,7 @@
     if (act === 'rename') return startRename();
     if (act === 'export') return exportPlan();
     if (act === 'import') return openImportPanel(null);
+    if (act === 'paces') { pacesView = null; return openPacesPanel(); }
     if (act === 'new') {
       return openNewPlanPanel();
     } else if (act === 'dup') {
@@ -3800,6 +4606,11 @@
     if (f) importPlanFile(f);
     e.target.value = '';
   });
+  els.activityFile.addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) importActivityFile(f);
+    e.target.value = '';
+  });
   els.account.addEventListener('click', (e) => {
     const b = e.target.closest('[data-acct]');
     if (!b || !cloudReady()) return;
@@ -3827,6 +4638,7 @@
   els.setupBtn.addEventListener('click', openSetupPanel);
   els.coachBtn.addEventListener('click', openCoach);
   els.aboutBtn.addEventListener('click', openAboutPanel);
+  els.privacyBtn.addEventListener('click', openPrivacyPanel);
   // The one pair of arrows serves whichever view is on screen.
   els.prevWeek.addEventListener('click', () => {
     if (state.view === 'month') stepMonth(-1);
@@ -4079,6 +4891,11 @@
   renderAccount();
   maybeShowFirstRun();
 
+  // A Strava connection finishes on a redirect back to this page, so the code
+  // in the address bar has to be spent on the way in. Does nothing at all
+  // unless this browser was told about Strava and is actually coming back.
+  resumeStravaConnect();
+
   // The Firebase module (below) is a deferred module, so it loads after this
   // classic script. Bind when it signals ready; if it never loads, stay local.
   if (window.imCloud) bindCloud();
@@ -4092,7 +4909,7 @@
        (see firestore.rules); deploy those before relying on sync. -->
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js';
-    import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js';
+    import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, deleteUser, reauthenticateWithPopup } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js';
     import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc } from 'https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js';
 
     const firebaseConfig = {
@@ -4151,6 +4968,30 @@
         async deletePlan(id) {
           if (!uid) return;
           await deleteDoc(doc(db, 'users', uid, 'plans', id));
+        },
+        // Erasure, in the GDPR sense rather than the tidying-up sense. The plans
+        // are the training data; the account record is the athlete's name, email
+        // and photo, and deleting one without the other leaves the half that
+        // identifies them. So both go, plans first — if the account went first
+        // there would be no uid left to reach the documents with.
+        async eraseEverything() {
+          if (!uid) throw new Error('Not signed in');
+          const snap = await getDocs(collection(db, 'users', uid, 'plans'));
+          for (const d of snap.docs) await deleteDoc(d.ref);
+          const user = auth.currentUser;
+          try {
+            await deleteUser(user);
+          } catch (e) {
+            // Firebase refuses to delete an account on a session it considers
+            // stale, and says so in a code rather than a message. One fresh
+            // sign-in is worth attempting before handing the failure back: the
+            // documents are already gone, and leaving the account behind is
+            // exactly the outcome this method exists to prevent.
+            if (e && e.code === 'auth/requires-recent-login') {
+              await reauthenticateWithPopup(user, provider);
+              await deleteUser(auth.currentUser);
+            } else throw e;
+          }
         },
       };
     } catch (e) {

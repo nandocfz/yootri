@@ -1,0 +1,12 @@
+name = "yootri-strava-relay"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+# Origins allowed to call the relay. Anything not listed gets no CORS headers
+# back and so cannot read the reply. Add your own domain here before deploying.
+[vars]
+ALLOWED_ORIGINS = "http://localhost:8000"
+
+# STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET are set with `wrangler secret put`
+# and deliberately do not appear here. Everything in this repository is served
+# publicly by GitHub Pages, this file included.
