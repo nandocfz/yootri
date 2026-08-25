@@ -40,7 +40,8 @@ fails and the app falls back to local-only.
 
 ## 4. Create the Firestore database
 
-**Build → Firestore Database → Create database.** Pick a region near you.
+**Build → Firestore Database → Create database.** Pick a region near you, and
+note which one — your privacy notice has to name it, in step 7.
 
 Start in production mode — the rules in the next step replace whatever you pick.
 
@@ -82,6 +83,26 @@ is the security rules from step 5 — which is why deploying them is not optiona
 You can additionally restrict the key in the Google Cloud console under
 **APIs & Services → Credentials**, by setting HTTP referrer restrictions to your
 own domains.
+
+## 7. Rewrite the privacy notice for your deployment
+
+Once people can sign in, you are the controller of their training data, and the
+notice in the app is speaking for *you*. Two constants near the top of the
+`PRIVACY_SECTIONS` block in `index.html` carry the facts that cannot be derived
+from anything else:
+
+```js
+const PRIVACY_CONTACT = 'you@example.com';   // where data requests reach you
+const PRIVACY_REGION  = 'eur3 (Europe)';     // the region you picked in step 4
+```
+
+Leave either blank and the notice renders a loud marker in its place and
+`npm test` fails, so a half-written notice cannot ship by accident. Filling them
+in with this repository's values is worse than leaving them blank: your users
+would be told to write to somebody else about data that person cannot reach.
+
+The surrounding prose names the developer and their country, and the disclaimer
+above it describes the project. Read both and make them true of your fork.
 
 ## Checking it worked
 
