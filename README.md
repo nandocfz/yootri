@@ -1,4 +1,4 @@
-# yootri
+# yootriCZ
 
 <!-- SPDX-License-Identifier: MIT -->
 
